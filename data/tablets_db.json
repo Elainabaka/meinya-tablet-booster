@@ -1,0 +1,390 @@
+{
+  "schema_version": "1.0.0",
+  "project": "Meinya Tablet Booster",
+  "author": "Elainabaka",
+  "description": "Dữ liệu tham khảo để nhận diện bảng vẽ và chọn nhịp chèn chuyển động chuột. Số Hz và ngưỡng chưa có nguồn hãng được đánh dấu ước lượng; không phải giới hạn phần cứng đã kiểm chứng.",
+  "sweet_spot_rules": {
+    "sync_1x_description": "1x lấy tần số màn hình làm nhịp mục tiêu tham khảo; worker không đồng bộ với thời điểm quét khung hình, không bảo đảm mỗi khung hình có một mẫu mới.",
+    "safe_software_ceiling_hz": 360,
+    "warning_overkill_hz": 400,
+    "danger_extreme_hz": 500,
+    "double_2x_description": "2x lấy hai lần tần số màn hình làm nhịp mục tiêu tham khảo, không phải quy tắc Nyquist. 330 Hz tương ứng khoảng 3,03 ms nếu các sự kiện cách đều; không bảo đảm độ trễ hay tổng đầu ra thực tế.",
+    "hz_nguon": "uoc-luong"
+  },
+  "memory_architecture": {
+    "tier_1_hardware_mcu": "Công cụ không đọc bộ nhớ MCU, không sửa firmware và không gửi lệnh đổi tần số báo cáo phần cứng. Chưa có nguồn xác nhận kích thước FIFO hay thời gian lưu trên bảng vẽ.",
+    "tier_2_ram_ring_buffer": "Hai mảng vòng đo khoảng thời gian, mỗi mảng 256 ô, và một mảng vòng 512 điểm canvas có dung lượng cố định. Worker xả vận tốc khi không nhận chuyển động quá 180 ms; đây không phải phép đo nhấc bút.",
+    "tier_3_disk_atomic_swap": "Cấu hình Wacom tại %APPDATA%\\WTablet\\Wacom_Tablet.dat. Bản .original_backup giữ nội dung lúc sao lưu lần đầu. Chỉ sửa khóa đã có; ghi file tạm rồi File.Replace, có mutex. Khôi phục phụ thuộc bản sao lưu còn nguyên vẹn và quyền truy cập."
+  },
+  "tablets": [
+    {
+      "id": "wacom-ctl-472",
+      "brand": "Wacom",
+      "name": "One by Wacom Small (CTL-472)",
+      "vid": "056A",
+      "pids": [
+        "037A"
+      ],
+      "native_hz": 133,
+      "native_interval_ms": 7.52,
+      "safe_software_hz_min": 133,
+      "safe_software_hz_max": 360,
+      "recommended_mode": "Thử nhịp mục tiêu 1x hoặc 2x màn hình và tự đánh giá độ mượt con trỏ.",
+      "safe_note": "Các số Hz và ngưỡng trong hồ sơ là ước lượng. Bộ làm mượt chỉ chèn chuyển động chuột tương đối, không tăng tần số báo cáo thật hay thêm dữ liệu lực nhấn.",
+      "danger_note": "Chuyển động chèn có thể làm con trỏ lệch tạm khỏi đầu bút và chịu tốc độ chuột / Enhance pointer precision của Windows. Cấu hình Wacom chỉ dành cho driver Wacom; hiệu quả cần thử trong ứng dụng dùng con trỏ.",
+      "hz_nguon": "uoc-luong"
+    },
+    {
+      "id": "wacom-ctl-672",
+      "brand": "Wacom",
+      "name": "One by Wacom Medium (CTL-672)",
+      "vid": "056A",
+      "pids": [
+        "037B"
+      ],
+      "native_hz": 133,
+      "native_interval_ms": 7.52,
+      "safe_software_hz_min": 133,
+      "safe_software_hz_max": 360,
+      "recommended_mode": "Thử nhịp mục tiêu 1x hoặc 2x màn hình và tự đánh giá độ mượt con trỏ.",
+      "safe_note": "Các số Hz và ngưỡng trong hồ sơ là ước lượng. Bộ làm mượt chỉ chèn chuyển động chuột tương đối, không tăng tần số báo cáo thật hay thêm dữ liệu lực nhấn.",
+      "danger_note": "Chuyển động chèn có thể làm con trỏ lệch tạm khỏi đầu bút và chịu tốc độ chuột / Enhance pointer precision của Windows. Cấu hình Wacom chỉ dành cho driver Wacom; hiệu quả cần thử trong ứng dụng dùng con trỏ.",
+      "hz_nguon": "uoc-luong"
+    },
+    {
+      "id": "wacom-ctl-4100",
+      "brand": "Wacom",
+      "name": "Wacom Intuos Small (CTL-4100 / CTL-4100WL)",
+      "vid": "056A",
+      "pids": [
+        "0374",
+        "0376"
+      ],
+      "native_hz": 133,
+      "native_interval_ms": 7.52,
+      "safe_software_hz_min": 133,
+      "safe_software_hz_max": 360,
+      "recommended_mode": "Thử nhịp mục tiêu 1x hoặc 2x màn hình và tự đánh giá độ mượt con trỏ.",
+      "safe_note": "Các số Hz và ngưỡng trong hồ sơ là ước lượng. Bộ làm mượt chỉ chèn chuyển động chuột tương đối, không tăng tần số báo cáo thật hay thêm dữ liệu lực nhấn.",
+      "danger_note": "Chuyển động chèn có thể làm con trỏ lệch tạm khỏi đầu bút và chịu tốc độ chuột / Enhance pointer precision của Windows. Cấu hình Wacom chỉ dành cho driver Wacom; hiệu quả cần thử trong ứng dụng dùng con trỏ.",
+      "hz_nguon": "uoc-luong"
+    },
+    {
+      "id": "wacom-ctl-6100",
+      "brand": "Wacom",
+      "name": "Wacom Intuos Medium (CTL-6100 / CTL-6100WL)",
+      "vid": "056A",
+      "pids": [
+        "0375",
+        "0378"
+      ],
+      "native_hz": 133,
+      "native_interval_ms": 7.52,
+      "safe_software_hz_min": 133,
+      "safe_software_hz_max": 360,
+      "recommended_mode": "Thử nhịp mục tiêu 1x hoặc 2x màn hình và tự đánh giá độ mượt con trỏ.",
+      "safe_note": "Các số Hz và ngưỡng trong hồ sơ là ước lượng. Bộ làm mượt chỉ chèn chuyển động chuột tương đối, không tăng tần số báo cáo thật hay thêm dữ liệu lực nhấn.",
+      "danger_note": "Chuyển động chèn có thể làm con trỏ lệch tạm khỏi đầu bút và chịu tốc độ chuột / Enhance pointer precision của Windows. Cấu hình Wacom chỉ dành cho driver Wacom; hiệu quả cần thử trong ứng dụng dùng con trỏ.",
+      "hz_nguon": "uoc-luong"
+    },
+    {
+      "id": "wacom-ctl-480",
+      "brand": "Wacom",
+      "name": "Wacom Intuos Pen Small (CTL-480 / CTH-480)",
+      "vid": "056A",
+      "pids": [
+        "030E",
+        "0302"
+      ],
+      "native_hz": 133,
+      "native_interval_ms": 7.52,
+      "safe_software_hz_min": 133,
+      "safe_software_hz_max": 360,
+      "recommended_mode": "Thử nhịp mục tiêu 1x hoặc 2x màn hình và tự đánh giá độ mượt con trỏ.",
+      "safe_note": "Các số Hz và ngưỡng trong hồ sơ là ước lượng. Bộ làm mượt chỉ chèn chuyển động chuột tương đối, không tăng tần số báo cáo thật hay thêm dữ liệu lực nhấn.",
+      "danger_note": "Chuyển động chèn có thể làm con trỏ lệch tạm khỏi đầu bút và chịu tốc độ chuột / Enhance pointer precision của Windows. Cấu hình Wacom chỉ dành cho driver Wacom; hiệu quả cần thử trong ứng dụng dùng con trỏ.",
+      "hz_nguon": "uoc-luong"
+    },
+    {
+      "id": "wacom-ctl-680",
+      "brand": "Wacom",
+      "name": "Wacom Intuos Pen Medium (CTL-680)",
+      "vid": "056A",
+      "pids": [
+        "0323"
+      ],
+      "native_hz": 133,
+      "native_interval_ms": 7.52,
+      "safe_software_hz_min": 133,
+      "safe_software_hz_max": 360,
+      "recommended_mode": "Thử nhịp mục tiêu 1x hoặc 2x màn hình và tự đánh giá độ mượt con trỏ.",
+      "safe_note": "Các số Hz và ngưỡng trong hồ sơ là ước lượng. Bộ làm mượt chỉ chèn chuyển động chuột tương đối, không tăng tần số báo cáo thật hay thêm dữ liệu lực nhấn.",
+      "danger_note": "Chuyển động chèn có thể làm con trỏ lệch tạm khỏi đầu bút và chịu tốc độ chuột / Enhance pointer precision của Windows. Cấu hình Wacom chỉ dành cho driver Wacom; hiệu quả cần thử trong ứng dụng dùng con trỏ.",
+      "hz_nguon": "uoc-luong",
+      "pid_nguon": [
+        "https://raw.githubusercontent.com/linuxwacom/libwacom/master/data/wacom-intuos-m-p.tablet"
+      ]
+    },
+    {
+      "id": "wacom-cth-680",
+      "brand": "Wacom",
+      "name": "Wacom Intuos Pen Medium (CTH-680)",
+      "vid": "056A",
+      "pids": [
+        "0303"
+      ],
+      "native_hz": 133,
+      "native_interval_ms": 7.52,
+      "safe_software_hz_min": 133,
+      "safe_software_hz_max": 360,
+      "recommended_mode": "Thử nhịp mục tiêu 1x hoặc 2x màn hình và tự đánh giá độ mượt con trỏ.",
+      "safe_note": "Các số Hz và ngưỡng trong hồ sơ là ước lượng. Bộ làm mượt chỉ chèn chuyển động chuột tương đối, không tăng tần số báo cáo thật hay thêm dữ liệu lực nhấn.",
+      "danger_note": "Chuyển động chèn có thể làm con trỏ lệch tạm khỏi đầu bút và chịu tốc độ chuột / Enhance pointer precision của Windows. Cấu hình Wacom chỉ dành cho driver Wacom; hiệu quả cần thử trong ứng dụng dùng con trỏ.",
+      "hz_nguon": "uoc-luong",
+      "pid_nguon": [
+        "https://raw.githubusercontent.com/linuxwacom/libwacom/master/data/wacom-intuos-m-pt.tablet"
+      ]
+    },
+    {
+      "id": "wacom-ctl-490",
+      "brand": "Wacom",
+      "name": "Wacom Intuos Draw/Art/Comic/Photo (CTL-490 / CTH-490 / CTH-690)",
+      "vid": "056A",
+      "pids": [
+        "033B",
+        "033C",
+        "033D",
+        "033E"
+      ],
+      "native_hz": 133,
+      "native_interval_ms": 7.52,
+      "safe_software_hz_min": 133,
+      "safe_software_hz_max": 360,
+      "recommended_mode": "Thử nhịp mục tiêu 1x hoặc 2x màn hình và tự đánh giá độ mượt con trỏ.",
+      "safe_note": "Các số Hz và ngưỡng trong hồ sơ là ước lượng. Bộ làm mượt chỉ chèn chuyển động chuột tương đối, không tăng tần số báo cáo thật hay thêm dữ liệu lực nhấn.",
+      "danger_note": "Chuyển động chèn có thể làm con trỏ lệch tạm khỏi đầu bút và chịu tốc độ chuột / Enhance pointer precision của Windows. Cấu hình Wacom chỉ dành cho driver Wacom; hiệu quả cần thử trong ứng dụng dùng con trỏ.",
+      "hz_nguon": "uoc-luong"
+    },
+    {
+      "id": "wacom-pth-660",
+      "brand": "Wacom",
+      "name": "Wacom Intuos Pro (PTH-460 / PTH-660 / PTH-860)",
+      "vid": "056A",
+      "pids": [
+        "0392",
+        "0357",
+        "0358"
+      ],
+      "native_hz": 200,
+      "native_interval_ms": 5.0,
+      "safe_software_hz_min": 200,
+      "safe_software_hz_max": 400,
+      "recommended_mode": "Thử nhịp mục tiêu 1x hoặc 2x màn hình và tự đánh giá độ mượt con trỏ.",
+      "safe_note": "Các số Hz và ngưỡng trong hồ sơ là ước lượng. Bộ làm mượt chỉ chèn chuyển động chuột tương đối, không tăng tần số báo cáo thật hay thêm dữ liệu lực nhấn.",
+      "danger_note": "Chuyển động chèn có thể làm con trỏ lệch tạm khỏi đầu bút và chịu tốc độ chuột / Enhance pointer precision của Windows. Cấu hình Wacom chỉ dành cho driver Wacom; hiệu quả cần thử trong ứng dụng dùng con trỏ.",
+      "hz_nguon": "uoc-luong"
+    },
+    {
+      "id": "wacom-ptk-670",
+      "brand": "Wacom",
+      "name": "Wacom Intuos Pro Gen 3 (PTK-470 / PTK-670 / PTK-870)",
+      "vid": "056A",
+      "pids": [
+        "03F5",
+        "03F7",
+        "03F9"
+      ],
+      "native_hz": 300,
+      "native_interval_ms": 3.33,
+      "safe_software_hz_min": 300,
+      "safe_software_hz_max": 480,
+      "recommended_mode": "Thử nhịp mục tiêu 1x hoặc 2x màn hình và tự đánh giá độ mượt con trỏ.",
+      "safe_note": "Các số Hz và ngưỡng trong hồ sơ là ước lượng. Bộ làm mượt chỉ chèn chuyển động chuột tương đối, không tăng tần số báo cáo thật hay thêm dữ liệu lực nhấn.",
+      "danger_note": "Chuyển động chèn có thể làm con trỏ lệch tạm khỏi đầu bút và chịu tốc độ chuột / Enhance pointer precision của Windows. Cấu hình Wacom chỉ dành cho driver Wacom; hiệu quả cần thử trong ứng dụng dùng con trỏ.",
+      "hz_nguon": "uoc-luong",
+      "pid_nguon": [
+        "https://raw.githubusercontent.com/linuxwacom/libwacom/master/data/wacom-intuos-pro-3-s.tablet",
+        "https://raw.githubusercontent.com/linuxwacom/libwacom/master/data/wacom-intuos-pro-3-m.tablet",
+        "https://raw.githubusercontent.com/linuxwacom/libwacom/master/data/wacom-intuos-pro-3-l.tablet"
+      ]
+    },
+    {
+      "id": "wacom-one-display",
+      "brand": "Wacom",
+      "name": "Wacom One Pen Display (DTC-133 / DTC-121 / DTH-134)",
+      "vid": "056A",
+      "pids": [
+        "03B0",
+        "03CE",
+        "03CF"
+      ],
+      "native_hz": 133,
+      "native_interval_ms": 7.52,
+      "safe_software_hz_min": 133,
+      "safe_software_hz_max": 360,
+      "recommended_mode": "Thử nhịp mục tiêu 1x hoặc 2x màn hình và tự đánh giá độ mượt con trỏ.",
+      "safe_note": "Các số Hz và ngưỡng trong hồ sơ là ước lượng. Bộ làm mượt chỉ chèn chuyển động chuột tương đối, không tăng tần số báo cáo thật hay thêm dữ liệu lực nhấn.",
+      "danger_note": "Chuyển động chèn có thể làm con trỏ lệch tạm khỏi đầu bút và chịu tốc độ chuột / Enhance pointer precision của Windows. Cấu hình Wacom chỉ dành cho driver Wacom; hiệu quả cần thử trong ứng dụng dùng con trỏ.",
+      "hz_nguon": "uoc-luong"
+    },
+    {
+      "id": "xppen-star-g640",
+      "brand": "XP-Pen",
+      "name": "XP-Pen Star G640 / G430S",
+      "vid": "28BD",
+      "pids": [
+        "0914",
+        "0928",
+        "0094",
+        "0913",
+        "0075"
+      ],
+      "native_hz": 266,
+      "native_interval_ms": 3.76,
+      "safe_software_hz_min": 200,
+      "safe_software_hz_max": 400,
+      "recommended_mode": "Thử nhịp mục tiêu 1x hoặc 2x màn hình và tự đánh giá độ mượt con trỏ.",
+      "safe_note": "Các số Hz và ngưỡng trong hồ sơ là ước lượng. Bộ làm mượt chỉ chèn chuyển động chuột tương đối, không tăng tần số báo cáo thật hay thêm dữ liệu lực nhấn.",
+      "danger_note": "Chuyển động chèn có thể làm con trỏ lệch tạm khỏi đầu bút và chịu tốc độ chuột / Enhance pointer precision của Windows. Cấu hình Wacom chỉ dành cho driver Wacom; hiệu quả cần thử trong ứng dụng dùng con trỏ.",
+      "hz_nguon": "uoc-luong"
+    },
+    {
+      "id": "xppen-deco-series",
+      "brand": "XP-Pen",
+      "name": "XP-Pen Deco 01 V2 / Deco L / Deco LW / Deco Pro",
+      "vid": "28BD",
+      "pids": [
+        "0905",
+        "0935",
+        "0936",
+        "0904",
+        "0933"
+      ],
+      "native_hz": 220,
+      "native_interval_ms": 4.55,
+      "safe_software_hz_min": 220,
+      "safe_software_hz_max": 400,
+      "recommended_mode": "Thử nhịp mục tiêu 1x hoặc 2x màn hình và tự đánh giá độ mượt con trỏ.",
+      "safe_note": "Các số Hz và ngưỡng trong hồ sơ là ước lượng. Bộ làm mượt chỉ chèn chuyển động chuột tương đối, không tăng tần số báo cáo thật hay thêm dữ liệu lực nhấn.",
+      "danger_note": "Chuyển động chèn có thể làm con trỏ lệch tạm khỏi đầu bút và chịu tốc độ chuột / Enhance pointer precision của Windows. Cấu hình Wacom chỉ dành cho driver Wacom; hiệu quả cần thử trong ứng dụng dùng con trỏ.",
+      "hz_nguon": "uoc-luong"
+    },
+    {
+      "id": "huion-inspiroy",
+      "brand": "Huion",
+      "name": "Huion Inspiroy H420X / H640P / HS64 / H950P / Frego",
+      "vid": "256C",
+      "pids": [
+        "006D",
+        "006E",
+        "006F",
+        "0064"
+      ],
+      "native_hz": 266,
+      "native_interval_ms": 3.76,
+      "safe_software_hz_min": 233,
+      "safe_software_hz_max": 400,
+      "recommended_mode": "Thử nhịp mục tiêu 1x hoặc 2x màn hình và tự đánh giá độ mượt con trỏ.",
+      "safe_note": "Các số Hz và ngưỡng trong hồ sơ là ước lượng. Bộ làm mượt chỉ chèn chuyển động chuột tương đối, không tăng tần số báo cáo thật hay thêm dữ liệu lực nhấn.",
+      "danger_note": "Chuyển động chèn có thể làm con trỏ lệch tạm khỏi đầu bút và chịu tốc độ chuột / Enhance pointer precision của Windows. Cấu hình Wacom chỉ dành cho driver Wacom; hiệu quả cần thử trong ứng dụng dùng con trỏ.",
+      "hz_nguon": "uoc-luong"
+    },
+    {
+      "id": "gaomon-s620",
+      "brand": "Gaomon",
+      "name": "Gaomon S620 / M10K Pro / M106K",
+      "vid": "256C",
+      "pids": [
+        "006D",
+        "006E"
+      ],
+      "native_hz": 266,
+      "native_interval_ms": 3.76,
+      "safe_software_hz_min": 266,
+      "safe_software_hz_max": 400,
+      "recommended_mode": "Thử nhịp mục tiêu 1x hoặc 2x màn hình và tự đánh giá độ mượt con trỏ.",
+      "safe_note": "Các số Hz và ngưỡng trong hồ sơ là ước lượng. Bộ làm mượt chỉ chèn chuyển động chuột tương đối, không tăng tần số báo cáo thật hay thêm dữ liệu lực nhấn.",
+      "danger_note": "Chuyển động chèn có thể làm con trỏ lệch tạm khỏi đầu bút và chịu tốc độ chuột / Enhance pointer precision của Windows. Cấu hình Wacom chỉ dành cho driver Wacom; hiệu quả cần thử trong ứng dụng dùng con trỏ.",
+      "hz_nguon": "uoc-luong"
+    },
+    {
+      "id": "veikk-s640",
+      "brand": "Veikk",
+      "name": "Veikk S640 / VK640 / A30 / A15",
+      "vid": "2FEB",
+      "pids": [
+        "0001",
+        "0002",
+        "0003",
+        "0004"
+      ],
+      "native_hz": 250,
+      "native_interval_ms": 4.0,
+      "safe_software_hz_min": 250,
+      "safe_software_hz_max": 400,
+      "recommended_mode": "Thử nhịp mục tiêu 1x hoặc 2x màn hình và tự đánh giá độ mượt con trỏ.",
+      "safe_note": "Các số Hz và ngưỡng trong hồ sơ là ước lượng. Bộ làm mượt chỉ chèn chuyển động chuột tương đối, không tăng tần số báo cáo thật hay thêm dữ liệu lực nhấn.",
+      "danger_note": "Chuyển động chèn có thể làm con trỏ lệch tạm khỏi đầu bút và chịu tốc độ chuột / Enhance pointer precision của Windows. Cấu hình Wacom chỉ dành cho driver Wacom; hiệu quả cần thử trong ứng dụng dùng con trỏ.",
+      "hz_nguon": "uoc-luong"
+    },
+    {
+      "id": "xencelabs-tablet",
+      "brand": "Xencelabs",
+      "name": "Xencelabs Pen Tablet Small / Medium",
+      "vid": "28BD",
+      "pids": [
+        "5204",
+        "5201"
+      ],
+      "native_hz": 220,
+      "native_interval_ms": 4.55,
+      "safe_software_hz_min": 220,
+      "safe_software_hz_max": 400,
+      "recommended_mode": "Thử nhịp mục tiêu 1x hoặc 2x màn hình và tự đánh giá độ mượt con trỏ.",
+      "safe_note": "Các số Hz và ngưỡng trong hồ sơ là ước lượng. Bộ làm mượt chỉ chèn chuyển động chuột tương đối, không tăng tần số báo cáo thật hay thêm dữ liệu lực nhấn.",
+      "danger_note": "Chuyển động chèn có thể làm con trỏ lệch tạm khỏi đầu bút và chịu tốc độ chuột / Enhance pointer precision của Windows. Cấu hình Wacom chỉ dành cho driver Wacom; hiệu quả cần thử trong ứng dụng dùng con trỏ.",
+      "hz_nguon": "uoc-luong",
+      "pid_nguon": [
+        "https://raw.githubusercontent.com/OpenTabletDriver/OpenTabletDriver/master/OpenTabletDriver.Configurations/Configurations/XenceLabs/Pen%20Tablet%20Small.json",
+        "https://raw.githubusercontent.com/OpenTabletDriver/OpenTabletDriver/master/OpenTabletDriver.Configurations/Configurations/XenceLabs/Pen%20Tablet%20Medium.json"
+      ]
+    }
+  ],
+  "glossary": [
+    {
+      "term": "Tần số báo cáo (Report Rate - Hz)",
+      "summary": "Số lần thiết bị gửi báo cáo trong một giây; khác nhịp sự kiện chuột Windows.",
+      "detail": "Ví dụ toán học: 133 Hz tương ứng khoảng 7,52 ms giữa các báo cáo nếu đều. Số Hz trong các hồ sơ hiện tại là ước lượng, không phải kết quả đo hay thông số hãng đã xác nhận. Phép đo của app lấy từ hook chuột, có thể gồm chuột/touchpad; không đo trực tiếp luồng WinTab/Ink hay báo cáo USB."
+    },
+    {
+      "term": "Nhịp mục tiêu 1x & 2x màn hình (Sweet Spot)",
+      "summary": "Hai mức tham khảo để thử độ mượt con trỏ.",
+      "detail": "1x và 2x là tần số màn hình và gấp đôi con số đó; không phải chuẩn Nyquist và không khóa pha với màn hình. 330 Hz có chu kỳ khoảng 3,03 ms nếu sự kiện đều, không bảo đảm độ trễ dưới 1,5 ms. Gói thật vẫn đi qua, lịch CPU và làm tròn bước chuột ảnh hưởng đầu ra thực tế."
+    },
+    {
+      "term": "Làm mượt con trỏ bằng phần mềm",
+      "summary": "Chèn chuyển động chuột; không đổi tần số báo cáo phần cứng.",
+      "detail": "CPU dự đoán bước di chuyển từ vận tốc cũ, thời gian và hệ số làm mượt, rồi gọi SendInput với MOUSEEVENTF_MOVE tương đối. Mẫu bút thật kế tiếp có thể kéo con trỏ về vị trí đầu bút. WinTab/Windows Ink không đi qua bộ này: không có thêm tọa độ bút hay lực nhấn cho ứng dụng dùng các API đó. Công cụ không sửa firmware; không có cơ sở cam kết an toàn tuyệt đối hoặc hiệu quả cho mọi ứng dụng."
+    },
+    {
+      "term": "Độ bám quỹ đạo (Interpolation %)",
+      "summary": "Điều chỉnh hệ số lọc vận tốc và độ lớn bước chuột dự đoán.",
+      "detail": "Tăng hệ số có thể thay đổi cảm giác mượt, độ lệch và độ trễ cảm nhận. Chuyển động tương đối còn chịu tốc độ chuột và Enhance pointer precision của Windows. Tự thử trong ứng dụng nhận con trỏ; không xem đây là làm mượt dữ liệu lực nhấn hoặc nét bút WinTab/Ink."
+    },
+    {
+      "term": "PacketRate & MaxDataRateOn (cấu hình Wacom)",
+      "summary": "Khóa có trong tệp driver đã quan sát; ý nghĩa chưa có tài liệu hãng.",
+      "detail": "PacketRate: giá trị trong cấu hình driver Wacom; hãng không công bố đơn vị. Trên máy chủ dự án ngày 03/11/2026 đã thấy PacketRate=100 và MaxDataRateOn=true; đây không phải mặc định được xác nhận cho mọi driver. Không suy ra PacketRate là Hz hoặc đổi giá trị sẽ tăng băng thông. Chỉ sửa khóa đã có, thiếu khóa thì báo và bỏ qua."
+    },
+    {
+      "term": "Windows Ink & DoubleClickDistance",
+      "summary": "Tùy chọn cấu hình cần kiểm tra với driver và ứng dụng đang dùng.",
+      "detail": "Ứng dụng có thể nhận bút qua Windows Ink hoặc WinTab. Việc làm mượt chuột không thêm dữ liệu cho hai luồng này. DoubleClickDistance có trong tệp quan sát, nhưng chưa có nguồn hãng xác nhận đặt 0 sẽ loại bỏ thời gian chờ nhấp đúp. Khóa thiếu không được tự chèn; giữ bản sao lưu trước khi thay đổi."
+    },
+    {
+      "term": "Bộ đệm vòng & thu dọn bộ nhớ",
+      "summary": "Lịch sử mẫu có dung lượng cố định, không tăng theo thời gian chạy.",
+      "detail": "Hai bộ đệm khoảng thời gian 256 ô và canvas 512 điểm ghi đè ô cũ khi đầy. Điều này giới hạn lịch sử mẫu, không có nghĩa toàn ứng dụng không cấp phát hay không thể rò RAM. Worker xả vận tốc sau 180 ms không có chuyển động; không phát hiện trực tiếp trạng thái nhấc bút."
+    }
+  ]
+}

@@ -1,0 +1,10 @@
+# Build & temporary artifacts
+*.tmp
+*.bak
+*.log
+*.pdb
+*.old.*.exe
+assets/image_gen_result.md
+ui_preview.png
+*.exe
+_ban-cu/
