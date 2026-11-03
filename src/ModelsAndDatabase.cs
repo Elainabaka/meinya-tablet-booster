@@ -129,26 +129,48 @@ namespace MeinyaTabletBooster
 
         public static TabletDatabaseRoot LoadDatabase()
         {
+            // Thứ tự: data/tablets_db.json cạnh exe (người dùng tự sửa được), rồi bản nhúng trong exe
+            // (tải mỗi exe từ Releases vẫn đủ hồ sơ), cuối cùng bộ dự phòng một hồ sơ.
             string path = ResolveDatabasePath();
             try
             {
                 if (File.Exists(path))
                 {
-                    string json = File.ReadAllText(path, Encoding.UTF8);
-                    JavaScriptSerializer serializer = new JavaScriptSerializer();
-                    serializer.MaxJsonLength = 4 * 1024 * 1024;
-                    TabletDatabaseRoot root = serializer.Deserialize<TabletDatabaseRoot>(json);
-                    if (root != null && root.tablets != null && root.tablets.Count > 0)
+                    TabletDatabaseRoot root = ParseDatabase(File.ReadAllText(path, Encoding.UTF8));
+                    if (root != null) return root;
+                }
+            }
+            catch
+            {
+                // JSON hỏng: thử bản nhúng
+            }
+            try
+            {
+                using (Stream s = typeof(TabletDatabaseManager).Assembly.GetManifestResourceStream("tablets_db.json"))
+                {
+                    if (s != null)
                     {
-                        return root;
+                        using (StreamReader r = new StreamReader(s, Encoding.UTF8))
+                        {
+                            TabletDatabaseRoot root = ParseDatabase(r.ReadToEnd());
+                            if (root != null) return root;
+                        }
                     }
                 }
             }
             catch
             {
-                // Fallback to built-in default database if JSON is missing or corrupted
+                // bản nhúng hỏng: dùng bộ dự phòng
             }
             return CreateFallbackDatabase();
+        }
+
+        private static TabletDatabaseRoot ParseDatabase(string json)
+        {
+            JavaScriptSerializer serializer = new JavaScriptSerializer();
+            serializer.MaxJsonLength = 4 * 1024 * 1024;
+            TabletDatabaseRoot root = serializer.Deserialize<TabletDatabaseRoot>(json);
+            return root != null && root.tablets != null && root.tablets.Count > 0 ? root : null;
         }
 
         public static TabletDatabaseRoot CreateFallbackDatabase()

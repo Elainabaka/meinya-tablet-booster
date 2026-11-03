@@ -120,6 +120,8 @@ $cscArgs = @(
 if (Test-Path -LiteralPath $icoPath) {
     $cscArgs += ("/win32icon:" + $icoPath)
 }
+# Nhúng dữ liệu hồ sơ: tải mỗi exe vẫn đủ hồ sơ (file data/ cạnh exe vẫn được ưu tiên).
+$cscArgs += ("/resource:" + (Join-Path $root "data\tablets_db.json") + ",tablets_db.json")
 $cscArgs += $srcFiles
 
 Write-Host "[BUILD] Compiling MeinyaTabletBooster.exe..."
