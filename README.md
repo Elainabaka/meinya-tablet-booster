@@ -11,6 +11,17 @@
 
 [English below](#english)
 
+## Bắt đầu nhanh
+
+1. Vào mục [**Releases**](https://github.com/Elainabaka/meinya-tablet-booster/releases) của repo.
+2. Tải `MeinyaTabletBooster.exe` (so mã SHA-256 ghi trong ghi chú release nếu muốn chắc file không bị đổi).
+3. Bấm đúp để chạy. Cần Windows 10/11 có .NET Framework 4.8 (thường có sẵn).
+
+> **Trước khi chạy, nên biết:**
+> - File exe **chưa ký số**, nên Windows SmartScreen có thể cảnh báo: bấm **More info → Run anyway** nếu bạn tin nguồn này (hoặc tự biên dịch, mục dưới).
+> - App cài **hook chuột** và gửi chuyển động qua **SendInput**, nên vài phần mềm diệt virus có thể nghi ngờ. Mã nguồn đầy đủ ở repo này để bạn tự xem.
+> - App **không tăng report rate thật** của bảng vẽ; dữ liệu bút **WinTab / Windows Ink không đi qua** bộ làm mượt; mọi số Hz trong app là **ước lượng**.
+
 ## Công cụ làm gì, không làm gì
 
 | | |
@@ -34,15 +45,11 @@
 - `PacketRate` là giá trị trong cấu hình driver Wacom; hãng không công bố đơn vị, đừng coi nó là Hz.
 - Thấy số sai? Mở issue kèm nguồn (trang hãng, libwacom, OpenTabletDriver).
 
-## Chạy
+## Tự biên dịch từ mã nguồn
 
-Cần Windows và .NET Framework 4.x (có sẵn trên Windows 10/11).
+Tải mã nguồn (Code → Download ZIP, hoặc `git clone`), giải nén, rồi **bấm đúp `build.bat`**. Thiếu .NET Framework 4.x thì nó báo cách sửa; build xong nó tự mở app.
 
-```powershell
-powershell -ExecutionPolicy Bypass -File .\build.ps1
-```
-
-Script tạo icon nếu thiếu, biên dịch bằng `csc.exe` của .NET Framework ra `MeinyaTabletBooster.exe`, rồi chạy `--self-test` (dữ liệu giả, chỉ ghi tệp trong thư mục tạm) và `--ui-smoke-test` (mở form và cài hook chuột trong giây lát). Script dừng tiến trình `MeinyaTabletBooster` đang chạy và xóa bản build cũ trong thư mục dự án. Sau đó mở `MeinyaTabletBooster.exe`.
+`build.bat` gọi `build.ps1`: tạo icon nếu thiếu, biên dịch bằng `csc.exe` của .NET Framework ra `MeinyaTabletBooster.exe`, rồi chạy `--self-test` (dữ liệu giả, chỉ ghi tệp trong thư mục tạm) và `--ui-smoke-test` (mở form và cài hook chuột trong giây lát). Script dừng tiến trình `MeinyaTabletBooster` đang chạy và xóa bản build cũ trong thư mục dự án. Muốn chạy tay: `powershell -NoProfile -ExecutionPolicy Bypass -File .\build.ps1`.
 
 Kiến trúc và các quy tắc bất biến của code: [MINDMAP.md](MINDMAP.md).
 
@@ -58,6 +65,10 @@ Thấy công cụ có ích thì tặng repo một ⭐ để ủng hộ Elainabak
 
 **Meinya Tablet Booster** is a small Windows tool for pen-tablet users: it shows the mouse-event rate, tries software cursor smoothing, and edits a few existing keys in the Wacom driver configuration.
 
+**Quick start.** 1) Open the repo's [**Releases**](https://github.com/Elainabaka/meinya-tablet-booster/releases). 2) Download `MeinyaTabletBooster.exe` (check the SHA-256 in the release notes if you like). 3) Double-click it. Needs Windows 10/11 with .NET Framework 4.8 (usually built in).
+
+**Before you run it.** The exe is **not code-signed**, so Windows SmartScreen may warn you: choose **More info → Run anyway** if you trust this source, or build it yourself. The app installs a **mouse hook** and sends moves through **SendInput**, so some antivirus tools may flag it; the full source is here to read. It does **not** raise the tablet's real report rate, **WinTab / Windows Ink** pen data does not pass through the smoother, and every Hz value in the app is an **estimate**.
+
 **What it does.** Between two real mouse samples it predicts the next step from the measured velocity and injects a **relative** move with `SendInput`. In apps that read the mouse cursor (for example osu! in mouse mode) the cursor may look smoother on a high-refresh display. Try it and judge for yourself.
 
 **What it does not do.** It does not raise the tablet's real report rate and does not touch firmware. Pen coordinates and pressure delivered through **WinTab / Windows Ink** do not pass through this smoother, so drawing apps that use those APIs gain nothing. The next real pen sample always pulls the cursor back to the pen tip. Relative steps are affected by Windows pointer speed and *Enhance pointer precision*. The in-app rate is the mouse-event rate (it can include other mice or a touchpad), not a direct USB report-rate measurement.
@@ -66,6 +77,6 @@ Thấy công cụ có ích thì tặng repo một ⭐ để ủng hộ Elainabak
 
 **Data.** Every Hz value and threshold in the profiles is an **estimate** (`"hz_nguon": "uoc-luong"`; the app labels it). PIDs with a source carry `pid_nguon` links to libwacom or OpenTabletDriver; other PIDs have no source attached yet. `PacketRate` is a Wacom driver config value with no published unit; do not read it as Hz. Corrections with a source are welcome as issues.
 
-**Build and run.** Windows with .NET Framework 4.x. Run `powershell -ExecutionPolicy Bypass -File .\build.ps1`: it builds `MeinyaTabletBooster.exe` with the framework's `csc.exe`, runs `--self-test` (fake data, temp folder only) and `--ui-smoke-test` (briefly opens the form and installs the mouse hook). The script stops a running `MeinyaTabletBooster` process and deletes old builds in the project folder. Architecture notes: [MINDMAP.md](MINDMAP.md) (Vietnamese).
+**Build from source.** Download the code, then **double-click `build.bat`** (it explains what to do if .NET Framework 4.x is missing and opens the app when done). It runs `build.ps1`, which builds `MeinyaTabletBooster.exe` with the framework's `csc.exe`, runs `--self-test` (fake data, temp folder only) and `--ui-smoke-test` (briefly opens the form and installs the mouse hook). The script stops a running `MeinyaTabletBooster` process and deletes old builds in the project folder. Architecture notes: [MINDMAP.md](MINDMAP.md) (Vietnamese).
 
 **License.** Code under MIT ([LICENSE](LICENSE)). The **Meinya** name and artwork in `assets/` and the **Elainabaka** name are not covered by the code license; do not use them to brand derivative works.
