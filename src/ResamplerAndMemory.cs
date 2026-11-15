@@ -1,6 +1,5 @@
 using System;
 using System.Diagnostics;
-using System.Drawing;
 using System.Runtime.InteropServices;
 using System.Threading;
 
@@ -113,17 +112,20 @@ namespace MeinyaTabletBooster
         public long RingBufferRecycledCount;
         public long ManagedHeapBytes;
         public bool VelocityBufferFlushed;
+        public long IgnoredMouseEventsCount;
+        public long TabletEventsCount;
+        public string ActiveInputSourceLabel;
     }
 
     /// <summary>
-    /// INV-1, INV-2, INV-3: Bộ đo tần số phần cứng thực tế, nội suy thời gian thực trên CPU
-    /// và tự động thu dọn/xả đệm bộ nhớ (TemporalResampler & MemoryGuard).
+    /// INV-1, INV-2, INV-3: Bộ đo tần số sự kiện thực tế, lọc phân biệt Chuột rời vs Bảng vẽ/Bút (Windows Ink & Driver Inject),
+    /// nội suy thời gian thực chống văng lố trên CPU và tự động thu dọn/xả đệm bộ nhớ (TemporalResampler & MemoryGuard).
     /// </summary>
     public sealed class TemporalResamplerEngine : IDisposable
     {
         public const long InjectedSignature = 0x4D45494E; // "MEIN"
         public const long WindowsPenSignatureMask = 0xFFFFFF00L;
-        public const long WindowsPenSignatureValue = 0xFF515700L; // MI_WP_SIGNATURE
+        public const long WindowsPenSignatureValue = 0xFF515700L; // MI_WP_SIGNATURE (Pen)
         public const int IntervalRingCapacity = 256;
         public const int CanvasRingCapacity = 512;
         public const double IdleVelocityFlushMs = 180.0;
@@ -210,10 +212,15 @@ namespace MeinyaTabletBooster
         private volatile int _smoothingPercent = 35;
         private bool _timerPeriodActive;
 
+        private long _lastTabletDriverTick;
         private long _lastRawTick;
         private long _lastOutTick;
-        private long _lastPenSignatureTick;
+        private long _ignoredMouseEventsCount;
+        private long _tabletEventsCount;
+        private string _lastActiveSource = "Chờ tín hiệu";
         private double _peakRawHz;
+        private double _emaIntervalMs = 7.52;
+        private double _remainingStepBudgetPx;
         private double _prevRawX;
         private double _prevRawY;
         private double _currRawX;
@@ -241,6 +248,11 @@ namespace MeinyaTabletBooster
         {
             get { return _smoothingPercent; }
             set { _smoothingPercent = Math.Max(0, Math.Min(90, value)); }
+        }
+
+        public double RemainingStepBudgetPx
+        {
+            get { lock (_stateLock) { return _remainingStepBudgetPx; } }
         }
 
         public void StartHookAndEngine()
@@ -295,6 +307,7 @@ namespace MeinyaTabletBooster
             _velocityYPerMs = 0.0;
             _subPixelRemainderX = 0.0;
             _subPixelRemainderY = 0.0;
+            _remainingStepBudgetPx = 0.0;
             _hasValidVelocity = false;
         }
 
@@ -309,9 +322,13 @@ namespace MeinyaTabletBooster
                 _outIntervalMsBuffer.Clear();
                 _canvasRingBuffer.Clear();
                 _peakRawHz = 0.0;
+                _emaIntervalMs = 7.52;
                 _lastRawTick = 0;
                 _lastOutTick = 0;
-                _lastPenSignatureTick = 0;
+                _lastTabletDriverTick = 0;
+                _ignoredMouseEventsCount = 0;
+                _tabletEventsCount = 0;
+                _lastActiveSource = "Chờ tín hiệu";
                 ResetVelocityStateUnlocked();
             }
             GC.Collect(1, GCCollectionMode.Optimized, false);
@@ -325,6 +342,7 @@ namespace MeinyaTabletBooster
             double tickToMs = 1000.0 / Stopwatch.Frequency;
             lock (_stateLock)
             {
+                _tabletEventsCount++;
                 if (_lastRawTick > 0)
                 {
                     double dtMs = (timestampTicks - _lastRawTick) * tickToMs;
@@ -351,12 +369,26 @@ namespace MeinyaTabletBooster
                         // INV-3: Nếu nhấc bút đặt sang vị trí mới xa (>80px) hoặc sau khoảng nghỉ (>65ms), xóa vận tốc cũ ngay
                         if (dist > 0.0 && dist <= JumpTeleportThresholdPx && dtMs <= 65.0)
                         {
+                            _emaIntervalMs = (_emaIntervalMs <= 0.1) ? dtMs : (_emaIntervalMs * 0.8 + dtMs * 0.2);
                             double instVx = dx / dtMs;
                             double instVy = dy / dtMs;
                             double alpha = (_smoothingPercent / 100.0) * 0.65;
-                            _velocityXPerMs = _hasValidVelocity ? (_velocityXPerMs * alpha + instVx * (1.0 - alpha)) : instVx;
-                            _velocityYPerMs = _hasValidVelocity ? (_velocityYPerMs * alpha + instVy * (1.0 - alpha)) : instVy;
+
+                            if (_hasValidVelocity && ((dx * _velocityXPerMs + dy * _velocityYPerMs) <= 0.0))
+                            {
+                                // Cua gấp >= 90 độ hoặc đảo chiều: bám ngay hướng mới để tránh văng lố
+                                _velocityXPerMs = instVx;
+                                _velocityYPerMs = instVy;
+                                _subPixelRemainderX = 0.0;
+                                _subPixelRemainderY = 0.0;
+                            }
+                            else
+                            {
+                                _velocityXPerMs = _hasValidVelocity ? (_velocityXPerMs * alpha + instVx * (1.0 - alpha)) : instVx;
+                                _velocityYPerMs = _hasValidVelocity ? (_velocityYPerMs * alpha + instVy * (1.0 - alpha)) : instVy;
+                            }
                             _hasValidVelocity = true;
+                            _remainingStepBudgetPx = Math.Min(12.0, Math.Max(1.0, dist * (0.35 + (_smoothingPercent / 100.0) * 0.55)));
                         }
                         else
                         {
@@ -379,40 +411,69 @@ namespace MeinyaTabletBooster
             }
         }
 
+        public bool EvaluateHookMouseMove(long extraInfo, uint flags, long nowTicks, out bool isSelfInjected)
+        {
+            // INV-1: Bỏ qua hoàn toàn các gói tọa độ do chính bộ nội suy bơm vào để tránh lặp vô tận
+            long extraLow32 = extraInfo & 0xFFFFFFFFL;
+            isSelfInjected = (extraInfo == InjectedSignature) || (extraLow32 == InjectedSignature);
+            if (isSelfInjected)
+            {
+                return false;
+            }
+
+            bool hasPenInkSig = ((extraLow32 & WindowsPenSignatureMask) == WindowsPenSignatureValue);
+            if (hasPenInkSig)
+            {
+                lock (_stateLock)
+                {
+                    _lastTabletDriverTick = nowTicks;
+                    _lastActiveSource = "Bút (Windows Ink)";
+                }
+                return true;
+            }
+
+            bool isDriverInjected = ((flags & LLMHF_INJECTED) != 0) || ((flags & LLMHF_LOWER_IL_INJECTED) != 0);
+            if (isDriverInjected)
+            {
+                lock (_stateLock)
+                {
+                    _lastTabletDriverTick = nowTicks;
+                    _lastActiveSource = "Bảng vẽ (Driver Tablet)";
+                }
+                return true;
+            }
+
+            double tickToMs = 1000.0 / Stopwatch.Frequency;
+            lock (_stateLock)
+            {
+                double sinceTabletDriverMs = (_lastTabletDriverTick > 0) ? ((nowTicks - _lastTabletDriverTick) * tickToMs) : 99999.0;
+                if (sinceTabletDriverMs <= 2500.0)
+                {
+                    _ignoredMouseEventsCount++;
+                    _lastActiveSource = "Đã lọc Chuột rời";
+                    if (_hasValidVelocity)
+                    {
+                        ResetVelocityStateUnlocked();
+                    }
+                    return false;
+                }
+
+                _lastActiveSource = "Con trỏ HID";
+                return true;
+            }
+        }
+
         private IntPtr HookCallback(int nCode, IntPtr wParam, IntPtr lParam)
         {
             if (nCode >= 0 && wParam == (IntPtr)WM_MOUSEMOVE)
             {
                 MSLLHOOKSTRUCT info = (MSLLHOOKSTRUCT)Marshal.PtrToStructure(lParam, typeof(MSLLHOOKSTRUCT));
                 long extra = info.dwExtraInfo.ToInt64();
-
-                // INV-1: Bỏ qua hoàn toàn các gói tọa độ do chính bộ nội suy bơm vào để tránh lặp vô tận
-                bool isSelfInjected = (extra == InjectedSignature) ||
-                                      ((info.flags & LLMHF_INJECTED) != 0) ||
-                                      ((info.flags & LLMHF_LOWER_IL_INJECTED) != 0);
-
-                if (!isSelfInjected)
+                long now = Stopwatch.GetTimestamp();
+                bool isSelfInjected;
+                if (EvaluateHookMouseMove(extra, info.flags, now, out isSelfInjected))
                 {
-                    long now = Stopwatch.GetTimestamp();
-                    bool hasPenSig = ((extra & WindowsPenSignatureMask) == WindowsPenSignatureValue);
-
-                    if (hasPenSig)
-                    {
-                        _lastPenSignatureTick = now;
-                        ProcessRawHardwareSample(info.pt.X, info.pt.Y, now);
-                    }
-                    else
-                    {
-                        // Nếu trong 2.5 giây vừa qua đang có tín hiệu bút Windows Ink (MI_WP_SIGNATURE),
-                        // bỏ qua tín hiệu chuột rời (extra == 0) để chuột không làm nhiễu nhịp của bảng vẽ.
-                        double sincePenMs = (_lastPenSignatureTick > 0)
-                            ? ((now - _lastPenSignatureTick) * (1000.0 / Stopwatch.Frequency))
-                            : 99999.0;
-                        if (sincePenMs > 2500.0)
-                        {
-                            ProcessRawHardwareSample(info.pt.X, info.pt.Y, now);
-                        }
-                    }
+                    ProcessRawHardwareSample(info.pt.X, info.pt.Y, now);
                 }
             }
             return CallNextHookEx(_hookHandle, nCode, wParam, lParam);
@@ -448,6 +509,7 @@ namespace MeinyaTabletBooster
                 {
                     double sinceRawMs = (_lastRawTick > 0) ? ((nowTick - _lastRawTick) * tickToMs) : 9999.0;
                     double sinceOutMs = (_lastOutTick > 0) ? ((nowTick - _lastOutTick) * tickToMs) : 9999.0;
+                    double maxHorizonMs = Math.Max(4.5, Math.Min(12.0, (_emaIntervalMs > 1.0 ? _emaIntervalMs : 8.0) * 1.25));
 
                     // INV-3: Tự xả sạch bộ đệm vận tốc khi bút ngừng di chuyển quá 180ms
                     if (sinceRawMs > IdleVelocityFlushMs)
@@ -463,32 +525,63 @@ namespace MeinyaTabletBooster
                         // Lập lịch tổng đầu ra (gồm cả gói gốc + gói nội suy) đúng theo nhịp TargetHz
                         waitRemainingMs = targetPeriodMs - sinceOutMs;
                     }
-                    else if (_hasValidVelocity && sinceRawMs >= 0.8 && sinceRawMs <= 22.0 && _smoothingPercent > 0)
+                    else if (_hasValidVelocity && sinceRawMs >= 0.8 && sinceRawMs <= maxHorizonMs && _remainingStepBudgetPx > 0.25 && _smoothingPercent > 0)
                     {
                         double stepDt = Math.Min(sinceOutMs, 6.0);
-                        double damping = Math.Max(0.15, 1.0 - (sinceRawMs / 24.0));
-                        double blendFactor = (_smoothingPercent / 100.0) * 0.42 * damping;
+                        double damping = Math.Max(0.15, 1.0 - (sinceRawMs / (maxHorizonMs + 2.0)));
+                        double blendFactor = (0.20 + (_smoothingPercent / 100.0) * 0.65) * damping;
 
                         double rawStepX = _velocityXPerMs * stepDt * blendFactor + _subPixelRemainderX;
                         double rawStepY = _velocityYPerMs * stepDt * blendFactor + _subPixelRemainderY;
 
-                        // Kẹp biên an toàn: không bao giờ dịch quá 6px trong 1 bước nội suy
+                        // Kẹp biên an toàn: không bao giờ dịch quá 6px hoặc vượt ngân sách bước còn lại (Anti-Overshoot)
                         rawStepX = Math.Max(-6.0, Math.Min(6.0, rawStepX));
                         rawStepY = Math.Max(-6.0, Math.Min(6.0, rawStepY));
 
+                        double rawLen = Math.Sqrt(rawStepX * rawStepX + rawStepY * rawStepY);
+                        if (rawLen > _remainingStepBudgetPx && rawLen > 1e-6)
+                        {
+                            double scale = _remainingStepBudgetPx / rawLen;
+                            rawStepX *= scale;
+                            rawStepY *= scale;
+                        }
+
                         moveDx = (int)Math.Round(rawStepX);
                         moveDy = (int)Math.Round(rawStepY);
-                        _subPixelRemainderX = rawStepX - moveDx;
-                        _subPixelRemainderY = rawStepY - moveDy;
+                        double stepLen = Math.Sqrt((double)moveDx * moveDx + (double)moveDy * moveDy);
 
-                        if (moveDx != 0 || moveDy != 0)
+                        if (stepLen > _remainingStepBudgetPx)
                         {
-                            shouldSend = true;
+                            moveDx = 0;
+                            moveDy = 0;
+                            _remainingStepBudgetPx = 0.0;
+                            _subPixelRemainderX = 0.0;
+                            _subPixelRemainderY = 0.0;
+                            waitRemainingMs = 2.0;
                         }
+                        else
+                        {
+                            _subPixelRemainderX = rawStepX - moveDx;
+                            _subPixelRemainderY = rawStepY - moveDy;
+
+                            if (moveDx != 0 || moveDy != 0)
+                            {
+                                _remainingStepBudgetPx = Math.Max(0.0, _remainingStepBudgetPx - stepLen);
+                                shouldSend = true;
+                            }
+                            else
+                            {
+                                waitRemainingMs = 2.0;
+                            }
+                        }
+                    }
+                    else if (_hasValidVelocity && sinceRawMs < 0.8)
+                    {
+                        waitRemainingMs = 0.8 - sinceRawMs;
                     }
                     else
                     {
-                        waitRemainingMs = 1.0;
+                        waitRemainingMs = 2.0;
                     }
                 }
 
@@ -529,7 +622,7 @@ namespace MeinyaTabletBooster
                 }
                 else
                 {
-                    Thread.SpinWait(60);
+                    Thread.Sleep(1);
                 }
             }
         }
@@ -553,6 +646,9 @@ namespace MeinyaTabletBooster
                 snap.RingBufferActiveItems = _rawIntervalMsBuffer.Count + _canvasRingBuffer.Count;
                 snap.RingBufferMaxCapacity = IntervalRingCapacity + CanvasRingCapacity;
                 snap.RingBufferRecycledCount = _rawIntervalMsBuffer.TotalOverwrittenCount + _canvasRingBuffer.TotalOverwrittenCount;
+                snap.IgnoredMouseEventsCount = _ignoredMouseEventsCount;
+                snap.TabletEventsCount = _tabletEventsCount;
+                snap.ActiveInputSourceLabel = _lastActiveSource ?? "Chờ tín hiệu";
 
                 if (sinceRawMs <= 300.0 && _rawIntervalMsBuffer.Count >= 3)
                 {

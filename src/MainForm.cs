@@ -27,7 +27,7 @@ namespace MeinyaTabletBooster
     public sealed class MainForm : Form
     {
         private readonly TabletDatabaseRoot _db;
-        private readonly DetectedHardwareState _hwState;
+        private DetectedHardwareState _hwState;
         private readonly TemporalResamplerEngine _engine;
         private readonly CanvasSamplePoint[] _canvasRenderScratch = new CanvasSamplePoint[TemporalResamplerEngine.CanvasRingCapacity];
         private readonly float _dpiScale;
@@ -43,6 +43,7 @@ namespace MeinyaTabletBooster
         private Label _lblDetectedSummary;
         private Label _lblProfilePickerCaption;
         private ComboBox _cmbTabletProfile;
+        private Button _btnRescanUsb;
 
         // Smart safety & sweet spot banner
         private Panel _pnlSafetyBanner;
@@ -265,7 +266,7 @@ namespace MeinyaTabletBooster
             _cmbTabletProfile = new ComboBox
             {
                 Location = new Point(S(655), S(32)),
-                Size = new Size(S(310), S(26)),
+                Size = new Size(S(232), S(26)),
                 DropDownStyle = ComboBoxStyle.DropDownList,
                 BackColor = Color.FromArgb(28, 38, 56),
                 ForeColor = Color.White,
@@ -273,6 +274,22 @@ namespace MeinyaTabletBooster
             };
             _cmbTabletProfile.SelectedIndexChanged += OnTabletProfileChanged;
             pnlHeader.Controls.Add(_cmbTabletProfile);
+
+            _btnRescanUsb = new Button
+            {
+                Text = "Quét lại",
+                Font = MakeFont(10.8f, FontStyle.Bold),
+                BackColor = Color.FromArgb(42, 62, 96),
+                ForeColor = Color.White,
+                FlatStyle = FlatStyle.Flat,
+                Location = new Point(S(893), S(32)),
+                Size = new Size(S(72), S(26)),
+                Cursor = Cursors.Hand,
+                UseMnemonic = false
+            };
+            _btnRescanUsb.FlatAppearance.BorderSize = 0;
+            _btnRescanUsb.Click += OnRescanUsbClicked;
+            pnlHeader.Controls.Add(_btnRescanUsb);
 
             // =========================================================================
             // 2. SMART SAFETY & SWEET-SPOT BANNER (Y = 74 .. 134, H = 60)
@@ -418,8 +435,8 @@ namespace MeinyaTabletBooster
 
             _trkSmoothing = new TrackBar
             {
-                Location = new Point(S(10), S(110)),
-                Size = new Size(S(450), S(28)),
+                Location = new Point(S(10), S(109)),
+                Size = new Size(S(450), S(24)),
                 Minimum = 0,
                 Maximum = 85,
                 TickFrequency = 5,
@@ -435,7 +452,7 @@ namespace MeinyaTabletBooster
                 Multiline = true,
                 ReadOnly = true,
                 ScrollBars = ScrollBars.Vertical,
-                Font = MakeFont(10.2f, FontStyle.Regular),
+                Font = MakeFont(10.0f, FontStyle.Regular),
                 ForeColor = Color.FromArgb(188, 208, 232),
                 BackColor = Color.FromArgb(16, 22, 34),
                 BorderStyle = BorderStyle.FixedSingle,
@@ -878,6 +895,16 @@ namespace MeinyaTabletBooster
             _cmbTargetHz.SelectedIndex = 0;
         }
 
+        private void OnRescanUsbClicked(object sender, EventArgs e)
+        {
+            _hwState = HardwareDetectorAndAdvisor.DetectConnectedTablet(_db);
+            _selectedTablet = _hwState.Tablet;
+            PopulateTabletSelector();
+            PopulateTargetHzOptions();
+            UpdateHeaderAndTabletNotes();
+            UpdateSafetyBanner();
+        }
+
         private void OnTabletProfileChanged(object sender, EventArgs e)
         {
             TabletComboItem item = _cmbTabletProfile.SelectedItem as TabletComboItem;
@@ -909,7 +936,7 @@ namespace MeinyaTabletBooster
                 _hwState.SweetSpot1xHz,
                 _hwState.SweetSpot2xHz);
 
-            _lblRawHzSub.Text = "Hồ sơ: " + _selectedTablet.NativeHzDisplay;
+            _lblRawHzSub.Text = "Nguồn: Chỉ nhận Bảng vẽ | Hồ sơ: " + _selectedTablet.NativeHzDisplay;
 
             _lblTabletNoteBox.Text = "• Tham khảo: " + (_selectedTablet.safe_note ?? "") + "\r\n" +
                                      "• Cảnh báo: " + (_selectedTablet.danger_note ?? "");
@@ -988,6 +1015,7 @@ namespace MeinyaTabletBooster
                 _btnToggleResampler.Text = "BẬT LÀM MƯỢT CON TRỎ (F8)";
                 _btnToggleResampler.BackColor = Color.FromArgb(28, 158, 92);
             }
+            OnUiTimerTick(this, EventArgs.Empty);
         }
 
         private void OnCleanMemoryClicked(object sender, EventArgs e)
@@ -1034,21 +1062,20 @@ namespace MeinyaTabletBooster
                 if (_cmbPacketRate.SelectedIndex == 1) rate = 133;
                 else if (_cmbPacketRate.SelectedIndex == 2) rate = 200;
 
-                string skippedKeys = WacomConfigManager.ApplyOptimizedConfig(
+                string svcMsg;
+                string skippedKeys = WacomConfigManager.ApplyOptimizedConfigAndReloadService(
                     rate,
                     _chkMaxDataRate.Checked,
                     _chkWindowsInk.Checked,
-                    _chkFastTap.Checked);
-
-                string svcMsg;
-                WacomConfigManager.TryRestartWacomService(out svcMsg);
+                    _chkFastTap.Checked,
+                    out svcMsg);
 
                 MessageBox.Show(
                     "Đã xử lý các khóa đã có trong Wacom_Tablet.dat; khi có thay đổi, ghi bằng Atomic Swap.\nGiá trị yêu cầu (khóa thiếu được bỏ qua):\n\n" +
                     "• PacketRate: " + rate + " (giá trị trong cấu hình driver Wacom; hãng không công bố đơn vị)\n" +
                     "• MaxDataRateOn: " + (_chkMaxDataRate.Checked ? "Bật" : "Tắt") + "\n" +
                     "• Windows Ink: " + (_chkWindowsInk.Checked ? "Bật" : "Tắt") + "\n" +
-                    "• DoubleClickDistance: " + (_chkFastTap.Checked ? "0.0" : "2.0") + "\n\n" +
+                    "• DoubleClickDistance: " + (_chkFastTap.Checked ? "0.0" : "Khôi phục gốc / 2.0") + "\n\n" +
                     skippedKeys + "\n" + svcMsg,
                     "Meinya Tablet Booster — Kết Quả Cấu Hình",
                     MessageBoxButtons.OK,
@@ -1067,9 +1094,10 @@ namespace MeinyaTabletBooster
             {
                 WacomConfigState cfg = WacomConfigManager.ReadConfig();
                 bool restoredFromDiskBackup = false;
+                string svcMsg = string.Empty;
                 if (cfg.HasOriginalBackup)
                 {
-                    WacomConfigManager.RestoreOriginalBackup();
+                    WacomConfigManager.RestoreOriginalBackupAndReloadService(out svcMsg);
                     restoredFromDiskBackup = true;
                 }
 
@@ -1084,8 +1112,6 @@ namespace MeinyaTabletBooster
 
                 if (restoredFromDiskBackup)
                 {
-                    string svcMsg;
-                    WacomConfigManager.TryRestartWacomService(out svcMsg);
                     MessageBox.Show(
                         "Đã khôi phục Wacom_Tablet.dat từ bản .original_backup tạo ở lần sao lưu đầu, tắt làm mượt con trỏ và dọn bộ đệm.\n\n" + svcMsg,
                         "Khôi Phục Cấu Hình Ban Đầu Thành Công",
@@ -1273,11 +1299,20 @@ namespace MeinyaTabletBooster
             }
             else
             {
-                _lblRawHzVal.Text = "0 Hz (Chờ chuyển động)";
-                _lblOutHzVal.Text = _engine.IsResamplerEnabled ? ("Mục tiêu " + _engine.TargetHz + " Hz") : "0 Hz (Chờ chuyển động)";
+                _lblRawHzVal.Text = "0 Hz (Chờ bút)";
+                _lblOutHzVal.Text = _engine.IsResamplerEnabled ? ("Mục tiêu " + _engine.TargetHz + " Hz") : "0 Hz (Chờ bút)";
                 _lblIntervalVal.Text = "-- ms";
             }
 
+            string profileHz = _selectedTablet != null ? (_selectedTablet.native_hz + "Hz") : "133Hz";
+            _lblRawHzSub.Text = string.Format(
+                "{0} | Lọc chuột: {1} ({2})",
+                snap.ActiveInputSourceLabel,
+                snap.IgnoredMouseEventsCount,
+                profileHz);
+            _lblOutHzSub.Text = _engine.IsResamplerEnabled
+                ? ("Đang làm mượt (Mục tiêu " + _engine.TargetHz + " Hz)")
+                : "Đang tắt làm mượt (Bấm nút hoặc F8)";
             _lblIntervalSub.Text = "Đỉnh đo được (Peak): " + Math.Round(snap.PeakRawHz) + " Hz";
             _lblMemoryVal.Text = string.Format("Đệm: {0}/{1} ô", snap.RingBufferActiveItems, snap.RingBufferMaxCapacity);
             _lblMemorySub.Text = string.Format(

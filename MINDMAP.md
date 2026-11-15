@@ -55,16 +55,16 @@ flowchart TD
     end
 
     subgraph T2["Tầng 2: Xử Lý Thời Gian Thực & Quản Lý Bộ Nhớ (RAM)"]
-        C1["WH_MOUSE_LL Hook<br/>(Sự kiện chuột có thể gồm chuột hoặc touchpad)"] --> C2["Hai RingBuffer&lt;double&gt; (256 ô mỗi bộ)<br/>Nhịp hook và nhịp con trỏ ước tính"]
-        C1 --> C3["TemporalResampler (worker)<br/>Dự đoán bước từ vận tốc cũ và thời gian"]
+        C1["WH_MOUSE_LL Hook<br/>(Nhận MI_WP_SIGNATURE & Inject từ Wacom/Driver; lọc chuột rời trong 2.5s; tự chặn 0x4D45494E)"] --> C2["Hai RingBuffer&lt;double&gt; (256 ô mỗi bộ)<br/>Nhịp hook bảng vẽ và nhịp con trỏ ước tính"]
+        C1 --> C3["TemporalResampler (worker)<br/>Dự đoán chống văng lố có kẹp ngân sách bước"]
         C3 --> C4["MemoryGuard (Auto-Flush)<br/>Không có chuyển động >180ms -> Xả vận tốc"]
         C3 --> C5["SendInput (MOUSEEVENTF_MOVE)<br/>Bước chuột tương đối, chữ ký 0x4D45494E"]
-        C4 --> C6["Canvas RingBuffer (512 điểm cố định)<br/>Vẽ đường thử từ sự kiện chuột"]
+        C4 --> C6["Canvas RingBuffer (512 điểm cố định)<br/>Vẽ đường thử trực tiếp khi di chuyển trên bảng test"]
     end
 
     subgraph T3["Tầng 3: Cấu Hình Driver & Lưu Trữ An Toàn (Disk)"]
         D1["Wacom_Tablet.dat<br/>(%APPDATA%\\WTablet)"] --> D2["Bản sao lưu lần đầu không ghi đè<br/>(Wacom_Tablet.dat.original_backup)"]
-        D1 --> D3["Chỉ sửa khóa đã có<br/>Mutex, ghi .tmp -> File.Replace"]
+        D1 --> D3["Dừng WTabletServicePro trước khi ghi (nếu Admin)<br/>Mutex, ghi .tmp -> File.Replace -> bật lại service"]
     end
 
     B2 --> UI["Giao diện chính (MainForm)"]
@@ -81,7 +81,7 @@ Khi một AI (như Codex `gpt-6.1-sol`, Claude, Gemini) vào kiểm tra lỗi c�
 
 | Mã | Quy tắc bất biến (Invariant) | Mục đích bảo vệ | Cách kiểm tra trong Code |
 |---|---|---|---|
-| **INV-1** | **Không bao giờ tự lặp vô tận (No Hook Feedback Loop)** | Khi `TemporalResampler` bơm điểm nội suy qua `SendInput`, nó phải gắn chữ ký `dwExtraInfo = 0x4D45494E` (`"MEIN"`). Hàm `HookCallback` khi thấy chữ ký này hoặc cờ `LLMHF_INJECTED` **phải bỏ qua ngay**, không tính vào `Raw Hz` và không kích hoạt nội suy chồng lên chính nó. | Kiểm tra `HookCallback` trong `src/ResamplerAndMemory.cs`. |
+| **INV-1** | **Không bao giờ tự lặp vô tận (No Hook Feedback Loop)** | Khi `TemporalResampler` bơm điểm nội suy qua `SendInput`, nó phải gắn chữ ký `dwExtraInfo = 0x4D45494E` (`"MEIN"`). Hàm `EvaluateHookMouseMove` / `HookCallback` khi thấy chữ ký `0x4D45494E` **phải bỏ qua ngay** (`isSelfInjected = true`), không tính vào `Raw Hz` và không kích hoạt nội suy chồng lên chính nó (vẫn cho phép nhận gói `LLMHF_INJECTED` từ driver Wacom/OpenTabletDriver bên thứ ba). | Kiểm tra `EvaluateHookMouseMove` và `HookCallback` trong `src/ResamplerAndMemory.cs`. |
 | **INV-2** | **Không phình bộ nhớ RAM (Zero Unbounded Allocation)** | Lịch sử thời gian đo Hz và lịch sử các điểm vẽ trên bảng test **bắt buộc dùng mảng vòng cố định (`FixedRingBuffer<T>`)** với kích thước trần (`256` và `512`). Tuyệt đối không dùng `List<T>.Add()` không giới hạn trong luồng 1000 Hz hoặc luồng vẽ. | Kiểm tra `FixedRingBuffer<T>` và chạy `--self-test` với 100.000 điểm liên tiếp xem số phần tử có bị vượt trần không. |
 | **INV-3** | **Tự xả đệm vận tốc khi nhấc bút (Idle Velocity Flush)** | Khi người dùng ngừng di chuyển bút quá `180 ms`, bộ nội suy phải tự động dừng bơm điểm và xóa sạch vận tốc cũ (`ResetVelocityState()`). Mẫu nhảy xa `> 80 px` hoặc khoảng thời gian không đủ điều kiện tính vận tốc phải xả vận tốc; canvas không nối hai đoạn qua bước nhảy/khoảng nghỉ. Đây là suy ra từ chuyển động, không phải đọc trạng thái nhấc bút. | Kiểm tra `ResamplerWorkerLoop` và `ProcessRawHardwareSample` trong `src/ResamplerAndMemory.cs`. |
 | **INV-4** | **Bản sao lưu gốc là bất biến (Immutable Original Backup)** | File `Wacom_Tablet.dat.original_backup` chỉ được tạo khi **chưa tồn tại**. Các lần bấm *"Lưu & Áp Dụng"* tiếp theo tuyệt đối không được ghi đè lên `.original_backup`, để Reset lấy lại nội dung lúc sao lưu lần đầu nếu bản sao lưu còn nguyên vẹn và có quyền đọc/ghi. Chưa có backup thì giữ nguyên tệp; không suy ra đây là cấu hình xuất xưởng. | Kiểm tra `EnsureOriginalBackup()` và `ApplyOptimizedConfig()` trong `src/WacomConfigManager.cs`. |

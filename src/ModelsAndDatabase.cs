@@ -255,7 +255,58 @@ namespace MeinyaTabletBooster
         [DllImport("user32.dll", CharSet = CharSet.Ansi)]
         private static extern bool EnumDisplaySettingsA(string lpszDeviceName, int iModeNum, ref DEVMODEA lpDevMode);
 
+        [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
+        private struct POINTER_DEVICE_INFO
+        {
+            public uint displayOrientation;
+            public IntPtr device;
+            public int pointerDeviceType;
+            public IntPtr monitor;
+            public uint startingCursorId;
+            public ushort maxActiveContacts;
+            [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 520)]
+            public string productString;
+        }
+
+        [DllImport("user32.dll", SetLastError = true, CharSet = CharSet.Unicode)]
+        private static extern bool GetPointerDevices(ref uint deviceCount, [In, Out] POINTER_DEVICE_INFO[] pointerDevices);
+
         private const int ENUM_CURRENT_SETTINGS = -1;
+        private const int POINTER_DEVICE_TYPE_INTEGRATED_PEN = 1;
+        private const int POINTER_DEVICE_TYPE_EXTERNAL_PEN = 2;
+
+        public static List<string> QueryActivePointerPenProducts()
+        {
+            List<string> penProductStrings = new List<string>();
+            try
+            {
+                uint count = 0;
+                if (!GetPointerDevices(ref count, null) || count == 0 || count > 64)
+                {
+                    return penProductStrings;
+                }
+                POINTER_DEVICE_INFO[] devices = new POINTER_DEVICE_INFO[count];
+                if (!GetPointerDevices(ref count, devices))
+                {
+                    return penProductStrings;
+                }
+                for (int i = 0; i < (int)count && i < devices.Length; i++)
+                {
+                    POINTER_DEVICE_INFO d = devices[i];
+                    if ((d.pointerDeviceType == POINTER_DEVICE_TYPE_INTEGRATED_PEN ||
+                         d.pointerDeviceType == POINTER_DEVICE_TYPE_EXTERNAL_PEN) &&
+                        !string.IsNullOrEmpty(d.productString))
+                    {
+                        string trimmed = d.productString.Trim();
+                        if (trimmed.Length > 0) penProductStrings.Add(trimmed);
+                    }
+                }
+            }
+            catch
+            {
+            }
+            return penProductStrings;
+        }
 
         public static void GetPrimaryMonitorSpecs(out int width, out int height, out int refreshHz)
         {
@@ -278,28 +329,68 @@ namespace MeinyaTabletBooster
             }
         }
 
-        public static DetectedHardwareState DetectConnectedTablet(TabletDatabaseRoot db)
+        private static int ScoreTabletEntryAgainstContext(TabletEntry entry, string contextText)
         {
-            int monW, monH, monHz;
-            GetPrimaryMonitorSpecs(out monW, out monH, out monHz);
-
-            int sweet1x = monHz;
-            int sweet2x = monHz * 2;
-
-            DetectedHardwareState state = new DetectedHardwareState
+            if (entry == null || string.IsNullOrEmpty(contextText)) return 0;
+            int score = 0;
+            if (!string.IsNullOrEmpty(entry.brand) &&
+                contextText.IndexOf(entry.brand, StringComparison.OrdinalIgnoreCase) >= 0)
             {
-                MonitorWidth = monW,
-                MonitorHeight = monH,
-                MonitorRefreshHz = monHz,
-                SweetSpot1xHz = sweet1x,
-                SweetSpot2xHz = sweet2x,
-                IsConnected = false,
-                MatchedVidPid = "Chưa cắm USB hoặc đang dùng chế độ mô phỏng"
-            };
-
-            string pnpOutput = RunPnpUtilConnectedHid();
-            if (!string.IsNullOrEmpty(pnpOutput) && db != null && db.tablets != null)
+                score += 10;
+            }
+            if (!string.IsNullOrEmpty(entry.name))
             {
+                string[] tokens = entry.name.Split(new[] { ' ', '/', '(', ')', ',' }, StringSplitOptions.RemoveEmptyEntries);
+                foreach (string rawTok in tokens)
+                {
+                    string tok = rawTok.Trim();
+                    if (tok.Length < 4) continue;
+                    bool hasDigit = false;
+                    for (int i = 0; i < tok.Length; i++)
+                    {
+                        if (char.IsDigit(tok[i])) { hasDigit = true; break; }
+                    }
+                    if (!hasDigit && !string.Equals(tok, "Frego", StringComparison.OrdinalIgnoreCase)) continue;
+                    if (contextText.IndexOf(tok, StringComparison.OrdinalIgnoreCase) >= 0)
+                    {
+                        score += 20;
+                    }
+                }
+            }
+            return score;
+        }
+
+        public static TabletEntry MatchTabletFromPnpAndPointer(
+            TabletDatabaseRoot db,
+            string pnpOutput,
+            IEnumerable<string> pointerProducts,
+            out string matchedVidPid,
+            out bool isConnected)
+        {
+            matchedVidPid = "Chưa cắm USB hoặc đang dùng chế độ mô phỏng";
+            isConnected = false;
+
+            if (db == null || db.tablets == null || db.tablets.Count == 0)
+            {
+                return TabletDatabaseManager.CreateFallbackDatabase().tablets[0];
+            }
+
+            StringBuilder combinedContext = new StringBuilder();
+            if (!string.IsNullOrEmpty(pnpOutput)) combinedContext.AppendLine(pnpOutput);
+            if (pointerProducts != null)
+            {
+                foreach (string p in pointerProducts)
+                {
+                    if (!string.IsNullOrEmpty(p)) combinedContext.AppendLine(p);
+                }
+            }
+            string fullContext = combinedContext.ToString();
+
+            if (!string.IsNullOrEmpty(pnpOutput))
+            {
+                List<TabletEntry> matchedEntries = new List<TabletEntry>();
+                List<string> matchedPatterns = new List<string>();
+
                 foreach (TabletEntry entry in db.tablets)
                 {
                     if (string.IsNullOrEmpty(entry.vid) || entry.pids == null) continue;
@@ -308,25 +399,94 @@ namespace MeinyaTabletBooster
                         string pattern = "VID_" + entry.vid.ToUpperInvariant() + "&PID_" + pid.ToUpperInvariant();
                         if (pnpOutput.IndexOf(pattern, StringComparison.OrdinalIgnoreCase) >= 0)
                         {
-                            state.IsConnected = true;
-                            state.MatchedVidPid = pattern;
-                            state.Tablet = entry;
-                            return state;
+                            matchedEntries.Add(entry);
+                            matchedPatterns.Add(pattern);
+                            break;
                         }
+                    }
+                }
+
+                if (matchedEntries.Count == 1)
+                {
+                    isConnected = true;
+                    matchedVidPid = matchedPatterns[0];
+                    return matchedEntries[0];
+                }
+
+                if (matchedEntries.Count > 1)
+                {
+                    int bestIdx = 0;
+                    int bestScore = -1;
+                    for (int i = 0; i < matchedEntries.Count; i++)
+                    {
+                        int sc = ScoreTabletEntryAgainstContext(matchedEntries[i], fullContext);
+                        if (sc > bestScore)
+                        {
+                            bestScore = sc;
+                            bestIdx = i;
+                        }
+                    }
+                    isConnected = true;
+                    matchedVidPid = matchedPatterns[bestIdx];
+                    return matchedEntries[bestIdx];
+                }
+            }
+
+            if (pointerProducts != null)
+            {
+                string pointerContext = string.Join(" ", new List<string>(pointerProducts).ToArray());
+                if (!string.IsNullOrEmpty(pointerContext))
+                {
+                    TabletEntry bestEntry = null;
+                    int bestScore = 0;
+                    foreach (TabletEntry entry in db.tablets)
+                    {
+                        int sc = ScoreTabletEntryAgainstContext(entry, pointerContext);
+                        if (sc >= 20 && sc > bestScore)
+                        {
+                            bestScore = sc;
+                            bestEntry = entry;
+                        }
+                    }
+                    if (bestEntry != null)
+                    {
+                        isConnected = true;
+                        string pid = (bestEntry.pids != null && bestEntry.pids.Count > 0) ? bestEntry.pids[0].ToUpperInvariant() : "0000";
+                        matchedVidPid = "VID_" + (bestEntry.vid ?? "0000").ToUpperInvariant() + "&PID_" + pid + " (Pointer API)";
+                        return bestEntry;
                     }
                 }
             }
 
-            // Fallback: select the first tablet in database (e.g., CTL-472) as active profile
-            if (db != null && db.tablets != null && db.tablets.Count > 0)
+            return db.tablets[0];
+        }
+
+        public static DetectedHardwareState DetectConnectedTablet(TabletDatabaseRoot db)
+        {
+            int monW, monH, monHz;
+            GetPrimaryMonitorSpecs(out monW, out monH, out monHz);
+
+            int sweet1x = monHz;
+            int sweet2x = monHz * 2;
+
+            string pnpOutput = RunPnpUtilConnectedHid();
+            List<string> penProducts = QueryActivePointerPenProducts();
+
+            string matchedVidPid;
+            bool isConnected;
+            TabletEntry matchedTablet = MatchTabletFromPnpAndPointer(db, pnpOutput, penProducts, out matchedVidPid, out isConnected);
+
+            return new DetectedHardwareState
             {
-                state.Tablet = db.tablets[0];
-            }
-            else
-            {
-                state.Tablet = TabletDatabaseManager.CreateFallbackDatabase().tablets[0];
-            }
-            return state;
+                MonitorWidth = monW,
+                MonitorHeight = monH,
+                MonitorRefreshHz = monHz,
+                SweetSpot1xHz = sweet1x,
+                SweetSpot2xHz = sweet2x,
+                IsConnected = isConnected,
+                MatchedVidPid = matchedVidPid,
+                Tablet = matchedTablet
+            };
         }
 
         private static string RunPnpUtilConnectedHid()
@@ -345,9 +505,27 @@ namespace MeinyaTabletBooster
                 using (Process p = Process.Start(psi))
                 {
                     if (p == null) return string.Empty;
-                    string output = p.StandardOutput.ReadToEnd();
-                    p.WaitForExit(2500);
-                    return output ?? string.Empty;
+                    StringBuilder sb = new StringBuilder();
+                    object sbLock = new object();
+                    p.OutputDataReceived += (s, e) =>
+                    {
+                        if (e.Data != null)
+                        {
+                            lock (sbLock) { sb.AppendLine(e.Data); }
+                        }
+                    };
+                    p.ErrorDataReceived += (s, e) => { };
+                    p.BeginOutputReadLine();
+                    p.BeginErrorReadLine();
+                    if (!p.WaitForExit(2500))
+                    {
+                        try { p.Kill(); } catch { }
+                    }
+                    else
+                    {
+                        p.WaitForExit();
+                    }
+                    lock (sbLock) { return sb.ToString(); }
                 }
             }
             catch

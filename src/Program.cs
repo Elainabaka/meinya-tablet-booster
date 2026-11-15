@@ -123,7 +123,7 @@ namespace MeinyaTabletBooster
                     return 1;
                 }
 
-                // 4. Kiểm tra INV-3: TemporalResamplerEngine đo 133Hz & tự xả đệm vận tốc
+                // 4. Kiểm tra INV-1, INV-3: TemporalResamplerEngine đo 133Hz, phân biệt Chuột rời vs Bảng vẽ, chống văng lố & tự xả đệm
                 using (TemporalResamplerEngine engine = new TemporalResamplerEngine())
                 {
                     long freq = Stopwatch.Frequency;
@@ -137,6 +137,52 @@ namespace MeinyaTabletBooster
                     if (snap.RawHardwareHz < 128.0 || snap.RawHardwareHz > 138.0)
                     {
                         Console.Error.WriteLine("SELF-TEST FAIL: Simulated 133Hz measured as " + snap.RawHardwareHz);
+                        return 1;
+                    }
+                    if (engine.RemainingStepBudgetPx <= 0.0 || engine.RemainingStepBudgetPx > 12.0)
+                    {
+                        Console.Error.WriteLine("SELF-TEST FAIL: Anti-overshoot step budget out of range: " + engine.RemainingStepBudgetPx);
+                        return 1;
+                    }
+
+                    // Kiểm tra lọc phân biệt Tự bơm (INV-1) vs Windows Ink Pen vs Wacom/Driver Inject vs Chuột rời vs HID fallback
+                    long testNow = Stopwatch.GetTimestamp();
+                    long future1Sec = testNow + freq;
+                    long future4Sec = testNow + (4L * freq);
+                    bool selfInj;
+                    if (engine.EvaluateHookMouseMove(TemporalResamplerEngine.InjectedSignature, 0, testNow, out selfInj) || !selfInj)
+                    {
+                        Console.Error.WriteLine("SELF-TEST FAIL: InjectedSignature was not blocked by INV-1.");
+                        return 1;
+                    }
+                    if (!engine.EvaluateHookMouseMove(0xFF515701L, 0, testNow, out selfInj) || selfInj)
+                    {
+                        Console.Error.WriteLine("SELF-TEST FAIL: Windows Ink pen signature (0xFF515701) was wrongly rejected.");
+                        return 1;
+                    }
+                    if (!engine.EvaluateHookMouseMove(0xFF515781L, 1, testNow, out selfInj) || selfInj)
+                    {
+                        Console.Error.WriteLine("SELF-TEST FAIL: Windows 10/11 Ink pen signature (0xFF515781, flags=1) was wrongly rejected.");
+                        return 1;
+                    }
+                    if (!engine.EvaluateHookMouseMove(0, 1, testNow, out selfInj) || selfInj)
+                    {
+                        Console.Error.WriteLine("SELF-TEST FAIL: User-mode tablet driver injected packet (flags=1) was wrongly rejected.");
+                        return 1;
+                    }
+                    if (engine.EvaluateHookMouseMove(0, 0, future1Sec, out selfInj) || selfInj)
+                    {
+                        Console.Error.WriteLine("SELF-TEST FAIL: Physical mouse event 1s after tablet input was wrongly accepted.");
+                        return 1;
+                    }
+                    if (!engine.GetTelemetrySnapshot().VelocityBufferFlushed || engine.RemainingStepBudgetPx != 0.0)
+                    {
+                        Console.Error.WriteLine("SELF-TEST FAIL: Physical mouse rejection did not flush pending velocity/budget.");
+                        return 1;
+                    }
+                    if (!engine.EvaluateHookMouseMove(0, 0, future4Sec, out selfInj) || selfInj)
+                    {
+                        Console.Error.WriteLine("SELF-TEST FAIL: HID fallback after 4s idle was wrongly rejected.");
                         return 1;
                     }
 
@@ -157,6 +203,32 @@ namespace MeinyaTabletBooster
                         Console.Error.WriteLine("SELF-TEST FAIL: CleanAllBuffersAndCompactRam did not flush buffers.");
                         return 1;
                     }
+                }
+
+                // Kiểm tra phân biệt trùng VID/PID giữa Huion và Gaomon
+                string vidPidOut;
+                bool connOut;
+                TabletEntry gaomonMatch = HardwareDetectorAndAdvisor.MatchTabletFromPnpAndPointer(
+                    db,
+                    "Instance ID: HID\\VID_256C&PID_006D\\1\r\nDevice Description: Gaomon S620 Pen Tablet",
+                    null,
+                    out vidPidOut,
+                    out connOut);
+                if (!connOut || gaomonMatch == null || gaomonMatch.id != "gaomon-s620")
+                {
+                    Console.Error.WriteLine("SELF-TEST FAIL: Shared VID/PID disambiguation failed for Gaomon S620.");
+                    return 1;
+                }
+                TabletEntry huionMatch = HardwareDetectorAndAdvisor.MatchTabletFromPnpAndPointer(
+                    db,
+                    "Instance ID: HID\\VID_256C&PID_006D\\1\r\nDevice Description: Huion H640P Pen Tablet",
+                    null,
+                    out vidPidOut,
+                    out connOut);
+                if (!connOut || huionMatch == null || huionMatch.id != "huion-inspiroy")
+                {
+                    Console.Error.WriteLine("SELF-TEST FAIL: Shared VID/PID disambiguation failed for Huion Inspiroy.");
+                    return 1;
                 }
 
                 // 5. Kiểm tra INV-4 & INV-5: Atomic File Swap & Immutable Original Backup
@@ -260,15 +332,32 @@ namespace MeinyaTabletBooster
                     }
                     if (Directory.GetFiles(tempDir, "*.tmp*").Length != 0)
                         throw new InvalidOperationException("SELF-TEST FAIL: Q380 leftover .tmp files found.");
+
+                    // Kiểm tra khôi phục DoubleClickDistance gốc (ví dụ 3.500000) khi bỏ chọn FastTap
+                    string customDblDat = Path.Combine(tempDir, "custom-dbl.dat");
+                    string customDblContent = "<root>\n<DoubleClickDistance type=\"double\">3.500000</DoubleClickDistance>\n</root>\n";
+                    File.WriteAllText(customDblDat, customDblContent, new UTF8Encoding(false));
+                    WacomConfigManager.ApplyOptimizedConfig(133, true, true, true, customDblDat);
+                    WacomConfigManager.ApplyOptimizedConfig(133, true, true, false, customDblDat);
+                    if (File.ReadAllText(customDblDat, Encoding.UTF8) != customDblContent)
+                        throw new InvalidOperationException("SELF-TEST FAIL: DoubleClickDistance original value was not restored.");
                 }
                 finally
                 {
-                    // Giữ fixture để đối chiếu; không xóa tệp trong đợt kiểm chứng Q380.
-                    Console.WriteLine("SELF-TEST FIXTURES: " + Path.GetFileName(tempDir));
+                    try
+                    {
+                        if (Directory.Exists(tempDir))
+                        {
+                            Directory.Delete(tempDir, true);
+                        }
+                    }
+                    catch
+                    {
+                    }
                 }
 
                 Console.WriteLine(string.Format(
-                    "SELF-TEST OK | Profiles={0} | Glossary={1} | Q380Data=PASS | AdvisoryCases=PASS | SimulatedRaw133Hz=PASS | RingBuffer100k=PASS | AtomicRestore=PASS | MissingKeysByteExact=PASS | PartialKeys=PASS",
+                    "SELF-TEST OK | Profiles={0} | Glossary={1} | Q380Data=PASS | AdvisoryCases=PASS | SimulatedRaw133Hz=PASS | MouseVsTabletFilter=PASS | AntiOvershoot=PASS | SharedVidPid=PASS | RingBuffer100k=PASS | AtomicRestore=PASS | MissingKeysByteExact=PASS | PartialKeys=PASS",
                     db.tablets.Count,
                     db.glossary.Count));
                 return 0;

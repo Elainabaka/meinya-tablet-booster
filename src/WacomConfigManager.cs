@@ -273,7 +273,33 @@ namespace MeinyaTabletBooster
                     "${1}" + inkStr + "${3}",
                     RegexOptions.IgnoreCase);
 
-                string dblStr = disableDoubleClickDistance ? "0.000000" : "2.000000";
+                string dblStr = "2.000000";
+                if (disableDoubleClickDistance)
+                {
+                    dblStr = "0.000000";
+                }
+                else
+                {
+                    string backupPath = GetOriginalBackupPath(datPath);
+                    if (File.Exists(backupPath))
+                    {
+                        try
+                        {
+                            string backupContent = File.ReadAllText(backupPath, Encoding.UTF8);
+                            Match mOrigDbl = Regex.Match(backupContent, @"<DoubleClickDistance\s+type=""double"">([0-9.]+)</DoubleClickDistance>");
+                            double origVal;
+                            if (mOrigDbl.Success &&
+                                double.TryParse(mOrigDbl.Groups[1].Value, NumberStyles.Float, CultureInfo.InvariantCulture, out origVal) &&
+                                origVal > 0.05)
+                            {
+                                dblStr = mOrigDbl.Groups[1].Value;
+                            }
+                        }
+                        catch
+                        {
+                        }
+                    }
+                }
                 if (!Regex.IsMatch(content, @"<DoubleClickDistance\s+type=""double"">[0-9.]+</DoubleClickDistance>"))
                 {
                     skippedKeys.AppendLine("driver này không có khóa DoubleClickDistance, không sửa (không tìm thấy dạng khóa được hỗ trợ).");
@@ -321,6 +347,102 @@ namespace MeinyaTabletBooster
             {
                 return false;
             }
+        }
+
+        private static void ExecuteWithWacomServiceReload(
+            Action operation,
+            string actionNoun,
+            out string serviceStatusMessage,
+            string customDatPath)
+        {
+            bool canManageService = string.IsNullOrEmpty(customDatPath) && IsRunningAsAdministrator();
+            bool attemptedStop = false;
+            if (canManageService)
+            {
+                try
+                {
+                    int stopCode;
+                    RunHiddenCmd("net stop WTabletServicePro", 7000, out stopCode);
+                    attemptedStop = true;
+                }
+                catch { }
+            }
+
+            try
+            {
+                operation();
+            }
+            catch
+            {
+                if (attemptedStop)
+                {
+                    try
+                    {
+                        int recoverCode;
+                        RunHiddenCmd("net start WTabletServicePro", 7000, out recoverCode);
+                    }
+                    catch { }
+                }
+                throw;
+            }
+
+            if (!canManageService)
+            {
+                serviceStatusMessage = "Đã " + actionNoun + " an toàn. Để Wacom Driver nạp lại ngay lập tức không cần khởi động lại máy, bạn có thể bấm nút 'Mở lại Tool với Quyền Admin'.";
+                return;
+            }
+
+            try
+            {
+                int startCode;
+                bool startDone = RunHiddenCmd("net start WTabletServicePro", 7000, out startCode);
+                if (startDone && startCode == 0)
+                {
+                    serviceStatusMessage = "Đã dừng WTabletServicePro trước khi " + actionNoun + " và khởi động lại dịch vụ thành công!";
+                }
+                else
+                {
+                    serviceStatusMessage = "Đã " + actionNoun + " file an toàn, nhưng không thể tự khởi động lại WTabletServicePro (mã thoát: " + startCode + "). Bạn có thể rút cáp USB bảng vẽ cắm lại hoặc khởi động lại máy.";
+                }
+            }
+            catch (Exception ex)
+            {
+                serviceStatusMessage = "Đã " + actionNoun + " file an toàn, nhưng gặp lỗi khi bật lại dịch vụ: " + ex.Message;
+            }
+        }
+
+        public static string ApplyOptimizedConfigAndReloadService(
+            int packetRate,
+            bool maxDataRateOn,
+            bool winUseInk,
+            bool disableDoubleClickDistance,
+            out string serviceStatusMessage,
+            string customDatPath = null)
+        {
+            string skippedKeys = string.Empty;
+            ExecuteWithWacomServiceReload(
+                () =>
+                {
+                    skippedKeys = ApplyOptimizedConfig(
+                        packetRate,
+                        maxDataRateOn,
+                        winUseInk,
+                        disableDoubleClickDistance,
+                        customDatPath);
+                },
+                "lưu cấu hình",
+                out serviceStatusMessage,
+                customDatPath);
+            return skippedKeys;
+        }
+
+        public static void RestoreOriginalBackupAndReloadService(out string serviceStatusMessage, string customDatPath = null)
+        {
+            ExecuteWithWacomServiceReload(
+                () => RestoreOriginalBackup(customDatPath),
+                "khôi phục",
+                out serviceStatusMessage,
+                customDatPath);
         }
 
         public static bool TryRestartWacomService(out string statusMessage)
