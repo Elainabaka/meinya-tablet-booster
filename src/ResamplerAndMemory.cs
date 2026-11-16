@@ -115,6 +115,7 @@ namespace MeinyaTabletBooster
         public long IgnoredMouseEventsCount;
         public long TabletEventsCount;
         public string ActiveInputSourceLabel;
+        public double JitterMs;
     }
 
     /// <summary>
@@ -130,6 +131,7 @@ namespace MeinyaTabletBooster
         public const int CanvasRingCapacity = 512;
         public const double IdleVelocityFlushMs = 180.0;
         public const double JumpTeleportThresholdPx = 80.0;
+        public const double QuantizationDeadbandPx = 1.25;
 
         private const int WH_MOUSE_LL = 14;
         private const int WM_MOUSEMOVE = 0x0200;
@@ -137,6 +139,8 @@ namespace MeinyaTabletBooster
         private const uint LLMHF_LOWER_IL_INJECTED = 0x00000002;
         private const uint INPUT_MOUSE = 0;
         private const uint MOUSEEVENTF_MOVE = 0x0001;
+        private const uint CREATE_WAITABLE_TIMER_HIGH_RESOLUTION = 0x00000002;
+        private const uint TIMER_ALL_ACCESS = 0x1F0003;
 
         private delegate IntPtr LowLevelMouseProc(int nCode, IntPtr wParam, IntPtr lParam);
 
@@ -197,6 +201,20 @@ namespace MeinyaTabletBooster
         [DllImport("winmm.dll")]
         private static extern uint timeEndPeriod(uint uPeriod);
 
+        [DllImport("kernel32.dll", SetLastError = true, CharSet = CharSet.Unicode)]
+        private static extern IntPtr CreateWaitableTimerExW(IntPtr lpTimerAttributes, string lpTimerName, uint dwFlags, uint dwDesiredAccess);
+
+        [DllImport("kernel32.dll", SetLastError = true)]
+        [return: MarshalAs(UnmanagedType.Bool)]
+        private static extern bool SetWaitableTimer(IntPtr hTimer, ref long pDueTime, int lPeriod, IntPtr pfnCompletionRoutine, IntPtr lpArgToCompletionRoutine, [MarshalAs(UnmanagedType.Bool)] bool fResume);
+
+        [DllImport("kernel32.dll", SetLastError = true)]
+        private static extern uint WaitForSingleObject(IntPtr hHandle, uint dwMilliseconds);
+
+        [DllImport("kernel32.dll", SetLastError = true)]
+        [return: MarshalAs(UnmanagedType.Bool)]
+        private static extern bool CloseHandle(IntPtr hObject);
+
         private readonly FixedRingBuffer<double> _rawIntervalMsBuffer = new FixedRingBuffer<double>(IntervalRingCapacity);
         private readonly FixedRingBuffer<double> _outIntervalMsBuffer = new FixedRingBuffer<double>(IntervalRingCapacity);
         private readonly FixedRingBuffer<CanvasSamplePoint> _canvasRingBuffer = new FixedRingBuffer<CanvasSamplePoint>(CanvasRingCapacity);
@@ -229,9 +247,36 @@ namespace MeinyaTabletBooster
         private double _velocityYPerMs;
         private double _subPixelRemainderX;
         private double _subPixelRemainderY;
+        private double _velocityDerivX;
+        private double _velocityDerivY;
+        private long _lastSelfInjectedTick;
+        private volatile bool _hasTabletContext = true;
         private bool _hasValidVelocity;
 
         public FixedRingBuffer<CanvasSamplePoint> CanvasBuffer { get { return _canvasRingBuffer; } }
+
+        public bool HasTabletContext
+        {
+            get { return _hasTabletContext; }
+            set { _hasTabletContext = value; }
+        }
+
+        public bool WasRecentSelfInjected(long nowTicks)
+        {
+            lock (_stateLock)
+            {
+                if (_lastSelfInjectedTick <= 0 || nowTicks < _lastSelfInjectedTick) return false;
+                double elapsedMs = (nowTicks - _lastSelfInjectedTick) * (1000.0 / Stopwatch.Frequency);
+                return elapsedMs <= 4.0;
+            }
+        }
+
+        private static double ComputeLowPassAlpha(double dtSec, double cutoffHz)
+        {
+            if (dtSec <= 1e-6 || cutoffHz <= 1e-3) return 1.0;
+            double tau = 1.0 / (2.0 * Math.PI * cutoffHz);
+            return 1.0 / (1.0 + tau / dtSec);
+        }
 
         public bool IsResamplerEnabled
         {
@@ -305,6 +350,8 @@ namespace MeinyaTabletBooster
         {
             _velocityXPerMs = 0.0;
             _velocityYPerMs = 0.0;
+            _velocityDerivX = 0.0;
+            _velocityDerivY = 0.0;
             _subPixelRemainderX = 0.0;
             _subPixelRemainderY = 0.0;
             _remainingStepBudgetPx = 0.0;
@@ -326,6 +373,7 @@ namespace MeinyaTabletBooster
                 _lastRawTick = 0;
                 _lastOutTick = 0;
                 _lastTabletDriverTick = 0;
+                _lastSelfInjectedTick = 0;
                 _ignoredMouseEventsCount = 0;
                 _tabletEventsCount = 0;
                 _lastActiveSource = "Chờ tín hiệu";
@@ -372,23 +420,47 @@ namespace MeinyaTabletBooster
                             _emaIntervalMs = (_emaIntervalMs <= 0.1) ? dtMs : (_emaIntervalMs * 0.8 + dtMs * 0.2);
                             double instVx = dx / dtMs;
                             double instVy = dy / dtMs;
-                            double alpha = (_smoothingPercent / 100.0) * 0.65;
 
                             if (_hasValidVelocity && ((dx * _velocityXPerMs + dy * _velocityYPerMs) <= 0.0))
                             {
                                 // Cua gấp >= 90 độ hoặc đảo chiều: bám ngay hướng mới để tránh văng lố
                                 _velocityXPerMs = instVx;
                                 _velocityYPerMs = instVy;
+                                _velocityDerivX = 0.0;
+                                _velocityDerivY = 0.0;
                                 _subPixelRemainderX = 0.0;
                                 _subPixelRemainderY = 0.0;
                             }
+                            else if (_hasValidVelocity)
+                            {
+                                double dtSec = dtMs / 1000.0;
+                                double deltaPxX = Math.Abs(instVx - _velocityXPerMs) * dtMs;
+                                double deltaPxY = Math.Abs(instVy - _velocityYPerMs) * dtMs;
+                                double effDvX = (deltaPxX <= QuantizationDeadbandPx) ? 0.0 : (((deltaPxX - QuantizationDeadbandPx) / dtMs) / dtSec);
+                                double effDvY = (deltaPxY <= QuantizationDeadbandPx) ? 0.0 : (((deltaPxY - QuantizationDeadbandPx) / dtMs) / dtSec);
+                                double alphaD = ComputeLowPassAlpha(dtSec, 8.0);
+                                _velocityDerivX = alphaD * effDvX + (1.0 - alphaD) * _velocityDerivX;
+                                _velocityDerivY = alphaD * effDvY + (1.0 - alphaD) * _velocityDerivY;
+
+                                double minCutoffHz = Math.Max(1.2, 6.0 - (_smoothingPercent / 100.0) * 4.2);
+                                const double beta = 22.0;
+                                double alphaVx = ComputeLowPassAlpha(dtSec, minCutoffHz + beta * _velocityDerivX);
+                                double alphaVy = ComputeLowPassAlpha(dtSec, minCutoffHz + beta * _velocityDerivY);
+                                _velocityXPerMs = alphaVx * instVx + (1.0 - alphaVx) * _velocityXPerMs;
+                                _velocityYPerMs = alphaVy * instVy + (1.0 - alphaVy) * _velocityYPerMs;
+                            }
                             else
                             {
-                                _velocityXPerMs = _hasValidVelocity ? (_velocityXPerMs * alpha + instVx * (1.0 - alpha)) : instVx;
-                                _velocityYPerMs = _hasValidVelocity ? (_velocityYPerMs * alpha + instVy * (1.0 - alpha)) : instVy;
+                                _velocityXPerMs = instVx;
+                                _velocityYPerMs = instVy;
+                                _velocityDerivX = 0.0;
+                                _velocityDerivY = 0.0;
                             }
                             _hasValidVelocity = true;
-                            _remainingStepBudgetPx = Math.Min(12.0, Math.Max(1.0, dist * (0.35 + (_smoothingPercent / 100.0) * 0.55)));
+                            double rawBudget = dist * (0.35 + (_smoothingPercent / 100.0) * 0.55);
+                            _remainingStepBudgetPx = (dist < 1.5)
+                                ? Math.Min(1.0, rawBudget)
+                                : Math.Min(12.0, Math.Max(1.0, rawBudget));
                         }
                         else
                         {
@@ -418,6 +490,10 @@ namespace MeinyaTabletBooster
             isSelfInjected = (extraInfo == InjectedSignature) || (extraLow32 == InjectedSignature);
             if (isSelfInjected)
             {
+                lock (_stateLock)
+                {
+                    _lastSelfInjectedTick = nowTicks;
+                }
                 return false;
             }
 
@@ -433,7 +509,7 @@ namespace MeinyaTabletBooster
             }
 
             bool isDriverInjected = ((flags & LLMHF_INJECTED) != 0) || ((flags & LLMHF_LOWER_IL_INJECTED) != 0);
-            if (isDriverInjected)
+            if (isDriverInjected && _hasTabletContext)
             {
                 lock (_stateLock)
                 {
@@ -488,141 +564,173 @@ namespace MeinyaTabletBooster
             inputBuffer[0].mi.dwExtraInfo = (IntPtr)InjectedSignature;
             int inputStructSize = Marshal.SizeOf(typeof(INPUT));
 
-            while (!_isDisposed)
+            IntPtr waitTimer = IntPtr.Zero;
+            try
             {
-                if (!_resamplerEnabled)
+                waitTimer = CreateWaitableTimerExW(IntPtr.Zero, null, CREATE_WAITABLE_TIMER_HIGH_RESOLUTION, TIMER_ALL_ACCESS);
+            }
+            catch { }
+
+            try
+            {
+                while (!_isDisposed)
                 {
-                    Thread.Sleep(15);
-                    continue;
-                }
-
-                int targetHz = _targetHz;
-                double targetPeriodMs = 1000.0 / Math.Max(60, targetHz);
-                long nowTick = Stopwatch.GetTimestamp();
-
-                int moveDx = 0;
-                int moveDy = 0;
-                bool shouldSend = false;
-                double waitRemainingMs = 0.0;
-
-                lock (_stateLock)
-                {
-                    double sinceRawMs = (_lastRawTick > 0) ? ((nowTick - _lastRawTick) * tickToMs) : 9999.0;
-                    double sinceOutMs = (_lastOutTick > 0) ? ((nowTick - _lastOutTick) * tickToMs) : 9999.0;
-                    double maxHorizonMs = Math.Max(4.5, Math.Min(12.0, (_emaIntervalMs > 1.0 ? _emaIntervalMs : 8.0) * 1.25));
-
-                    // INV-3: Tự xả sạch bộ đệm vận tốc khi bút ngừng di chuyển quá 180ms
-                    if (sinceRawMs > IdleVelocityFlushMs)
+                    if (!_resamplerEnabled)
                     {
-                        if (_hasValidVelocity)
-                        {
-                            ResetVelocityStateUnlocked();
-                        }
-                        waitRemainingMs = 2.0;
+                        Thread.Sleep(15);
+                        continue;
                     }
-                    else if (sinceOutMs < targetPeriodMs)
+
+                    int targetHz = _targetHz;
+                    double targetPeriodMs = 1000.0 / Math.Max(60, targetHz);
+                    long nowTick = Stopwatch.GetTimestamp();
+
+                    int moveDx = 0;
+                    int moveDy = 0;
+                    bool shouldSend = false;
+                    double waitRemainingMs = 0.0;
+                    bool isIdleWait = false;
+
+                    lock (_stateLock)
                     {
-                        // Lập lịch tổng đầu ra (gồm cả gói gốc + gói nội suy) đúng theo nhịp TargetHz
-                        waitRemainingMs = targetPeriodMs - sinceOutMs;
-                    }
-                    else if (_hasValidVelocity && sinceRawMs >= 0.8 && sinceRawMs <= maxHorizonMs && _remainingStepBudgetPx > 0.25 && _smoothingPercent > 0)
-                    {
-                        double stepDt = Math.Min(sinceOutMs, 6.0);
-                        double damping = Math.Max(0.15, 1.0 - (sinceRawMs / (maxHorizonMs + 2.0)));
-                        double blendFactor = (0.20 + (_smoothingPercent / 100.0) * 0.65) * damping;
+                        double sinceRawMs = (_lastRawTick > 0) ? ((nowTick - _lastRawTick) * tickToMs) : 9999.0;
+                        double sinceOutMs = (_lastOutTick > 0) ? ((nowTick - _lastOutTick) * tickToMs) : 9999.0;
+                        double maxHorizonMs = Math.Max(4.5, Math.Min(12.0, (_emaIntervalMs > 1.0 ? _emaIntervalMs : 8.0) * 1.25));
 
-                        double rawStepX = _velocityXPerMs * stepDt * blendFactor + _subPixelRemainderX;
-                        double rawStepY = _velocityYPerMs * stepDt * blendFactor + _subPixelRemainderY;
-
-                        // Kẹp biên an toàn: không bao giờ dịch quá 6px hoặc vượt ngân sách bước còn lại (Anti-Overshoot)
-                        rawStepX = Math.Max(-6.0, Math.Min(6.0, rawStepX));
-                        rawStepY = Math.Max(-6.0, Math.Min(6.0, rawStepY));
-
-                        double rawLen = Math.Sqrt(rawStepX * rawStepX + rawStepY * rawStepY);
-                        if (rawLen > _remainingStepBudgetPx && rawLen > 1e-6)
+                        // INV-3: Tự xả sạch bộ đệm vận tốc khi bút ngừng di chuyển quá 180ms
+                        if (sinceRawMs > IdleVelocityFlushMs)
                         {
-                            double scale = _remainingStepBudgetPx / rawLen;
-                            rawStepX *= scale;
-                            rawStepY *= scale;
-                        }
-
-                        moveDx = (int)Math.Round(rawStepX);
-                        moveDy = (int)Math.Round(rawStepY);
-                        double stepLen = Math.Sqrt((double)moveDx * moveDx + (double)moveDy * moveDy);
-
-                        if (stepLen > _remainingStepBudgetPx)
-                        {
-                            moveDx = 0;
-                            moveDy = 0;
-                            _remainingStepBudgetPx = 0.0;
-                            _subPixelRemainderX = 0.0;
-                            _subPixelRemainderY = 0.0;
+                            if (_hasValidVelocity)
+                            {
+                                ResetVelocityStateUnlocked();
+                            }
                             waitRemainingMs = 2.0;
                         }
-                        else
+                        else if (sinceOutMs < targetPeriodMs)
                         {
-                            _subPixelRemainderX = rawStepX - moveDx;
-                            _subPixelRemainderY = rawStepY - moveDy;
+                            // Lập lịch tổng đầu ra (gồm cả gói gốc + gói nội suy) đúng theo nhịp TargetHz
+                            waitRemainingMs = targetPeriodMs - sinceOutMs;
+                        }
+                        else if (_hasValidVelocity && sinceRawMs >= 0.8 && sinceRawMs <= maxHorizonMs && _remainingStepBudgetPx > 0.25 && _smoothingPercent > 0)
+                        {
+                            double stepDt = Math.Min(sinceOutMs, 6.0);
+                            double damping = Math.Max(0.15, 1.0 - (sinceRawMs / (maxHorizonMs + 2.0)));
+                            double blendFactor = (0.20 + (_smoothingPercent / 100.0) * 0.65) * damping;
 
-                            if (moveDx != 0 || moveDy != 0)
+                            double rawStepX = _velocityXPerMs * stepDt * blendFactor + _subPixelRemainderX;
+                            double rawStepY = _velocityYPerMs * stepDt * blendFactor + _subPixelRemainderY;
+
+                            // Kẹp biên an toàn: không bao giờ dịch quá 6px hoặc vượt ngân sách bước còn lại (Anti-Overshoot)
+                            rawStepX = Math.Max(-6.0, Math.Min(6.0, rawStepX));
+                            rawStepY = Math.Max(-6.0, Math.Min(6.0, rawStepY));
+
+                            double rawLen = Math.Sqrt(rawStepX * rawStepX + rawStepY * rawStepY);
+                            if (rawLen > _remainingStepBudgetPx && rawLen > 1e-6)
                             {
-                                _remainingStepBudgetPx = Math.Max(0.0, _remainingStepBudgetPx - stepLen);
-                                shouldSend = true;
+                                double scale = _remainingStepBudgetPx / rawLen;
+                                rawStepX *= scale;
+                                rawStepY *= scale;
+                            }
+
+                            moveDx = (int)Math.Round(rawStepX);
+                            moveDy = (int)Math.Round(rawStepY);
+                            double stepLen = Math.Sqrt((double)moveDx * moveDx + (double)moveDy * moveDy);
+
+                            if (stepLen > _remainingStepBudgetPx)
+                            {
+                                moveDx = 0;
+                                moveDy = 0;
+                                _remainingStepBudgetPx = 0.0;
+                                _subPixelRemainderX = 0.0;
+                                _subPixelRemainderY = 0.0;
+                                waitRemainingMs = 2.0;
                             }
                             else
                             {
-                                waitRemainingMs = 2.0;
+                                _subPixelRemainderX = rawStepX - moveDx;
+                                _subPixelRemainderY = rawStepY - moveDy;
+
+                                if (moveDx != 0 || moveDy != 0)
+                                {
+                                    _remainingStepBudgetPx = Math.Max(0.0, _remainingStepBudgetPx - stepLen);
+                                    shouldSend = true;
+                                }
+                                else
+                                {
+                                    waitRemainingMs = 2.0;
+                                }
+                            }
+                        }
+                        else if (_hasValidVelocity && sinceRawMs < 0.8)
+                        {
+                            waitRemainingMs = 0.8 - sinceRawMs;
+                        }
+                        else
+                        {
+                            waitRemainingMs = 2.0;
+                        }
+                        isIdleWait = !_hasValidVelocity;
+                    }
+
+                    if (waitRemainingMs > 0.0)
+                    {
+                        if (isIdleWait && waitRemainingMs >= 1.8)
+                        {
+                            Thread.Sleep(1);
+                        }
+                        else
+                        {
+                            long deadlineTick = Stopwatch.GetTimestamp() + (long)Math.Round(waitRemainingMs / tickToMs);
+                            if (waitRemainingMs > 0.85 && waitTimer != IntPtr.Zero)
+                            {
+                                long due100Ns = -(long)Math.Round((waitRemainingMs - 0.55) * 10000.0);
+                                if (due100Ns < -1000)
+                                {
+                                    SetWaitableTimer(waitTimer, ref due100Ns, 0, IntPtr.Zero, IntPtr.Zero, false);
+                                    WaitForSingleObject(waitTimer, 4);
+                                }
+                            }
+                            while (!_isDisposed && Stopwatch.GetTimestamp() < deadlineTick)
+                            {
+                                Thread.SpinWait(40);
+                            }
+                        }
+                        continue;
+                    }
+
+                    if (shouldSend)
+                    {
+                        inputBuffer[0].mi.dx = moveDx;
+                        inputBuffer[0].mi.dy = moveDy;
+                        uint sent = SendInput(1, inputBuffer, inputStructSize);
+                        if (sent == 1)
+                        {
+                            long sentTick = Stopwatch.GetTimestamp();
+                            lock (_stateLock)
+                            {
+                                if (_lastOutTick > 0)
+                                {
+                                    double outDt = (sentTick - _lastOutTick) * tickToMs;
+                                    if (outDt >= 0.2 && outDt <= 160.0)
+                                    {
+                                        _outIntervalMsBuffer.Push(outDt);
+                                    }
+                                }
+                                _lastOutTick = sentTick;
                             }
                         }
                     }
-                    else if (_hasValidVelocity && sinceRawMs < 0.8)
-                    {
-                        waitRemainingMs = 0.8 - sinceRawMs;
-                    }
                     else
-                    {
-                        waitRemainingMs = 2.0;
-                    }
-                }
-
-                if (waitRemainingMs > 0.0)
-                {
-                    if (waitRemainingMs > 1.6)
                     {
                         Thread.Sleep(1);
                     }
-                    else
-                    {
-                        Thread.SpinWait(60);
-                    }
-                    continue;
                 }
-
-                if (shouldSend)
+            }
+            finally
+            {
+                if (waitTimer != IntPtr.Zero)
                 {
-                    inputBuffer[0].mi.dx = moveDx;
-                    inputBuffer[0].mi.dy = moveDy;
-                    uint sent = SendInput(1, inputBuffer, inputStructSize);
-                    if (sent == 1)
-                    {
-                        long sentTick = Stopwatch.GetTimestamp();
-                        lock (_stateLock)
-                        {
-                            if (_lastOutTick > 0)
-                            {
-                                double outDt = (sentTick - _lastOutTick) * tickToMs;
-                                if (outDt >= 0.2 && outDt <= 160.0)
-                                {
-                                    _outIntervalMsBuffer.Push(outDt);
-                                }
-                            }
-                            _lastOutTick = sentTick;
-                        }
-                    }
-                }
-                else
-                {
-                    Thread.Sleep(1);
+                    try { CloseHandle(waitTimer); } catch { }
                 }
             }
         }
@@ -664,6 +772,13 @@ namespace MeinyaTabletBooster
                     {
                         snap.AvgIntervalMs = avgMs;
                         snap.RawHardwareHz = 1000.0 / avgMs;
+                        double sqDiffSum = 0.0;
+                        for (int i = n - take; i < n; i++)
+                        {
+                            double diff = _tempIntervalsScratch[i] - avgMs;
+                            sqDiffSum += diff * diff;
+                        }
+                        snap.JitterMs = Math.Sqrt(sqDiffSum / take);
                     }
 
                     if (_resamplerEnabled)

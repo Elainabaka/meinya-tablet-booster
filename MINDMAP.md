@@ -55,8 +55,8 @@ flowchart TD
     end
 
     subgraph T2["Tầng 2: Xử Lý Thời Gian Thực & Quản Lý Bộ Nhớ (RAM)"]
-        C1["WH_MOUSE_LL Hook<br/>(Nhận MI_WP_SIGNATURE & Inject từ Wacom/Driver; lọc chuột rời trong 2.5s; tự chặn 0x4D45494E)"] --> C2["Hai RingBuffer&lt;double&gt; (256 ô mỗi bộ)<br/>Nhịp hook bảng vẽ và nhịp con trỏ ước tính"]
-        C1 --> C3["TemporalResampler (worker)<br/>Dự đoán chống văng lố có kẹp ngân sách bước"]
+        C1["WH_MOUSE_LL Hook<br/>(Nhận MI_WP_SIGNATURE & Inject từ Wacom/Driver; lọc chuột rời trong 2.5s; tự chặn 0x4D45494E)"] --> C2["Hai RingBuffer&lt;double&gt; (256 ô mỗi bộ)<br/>Nhịp hook, độ lệch chuẩn Jitter và nhịp con trỏ"]
+        C1 --> C3["TemporalResampler (worker + CreateWaitableTimerExW)<br/>Quantized 1€ Filter chống văng lố có kẹp ngân sách bước"]
         C3 --> C4["MemoryGuard (Auto-Flush)<br/>Không có chuyển động >180ms -> Xả vận tốc"]
         C3 --> C5["SendInput (MOUSEEVENTF_MOVE)<br/>Bước chuột tương đối, chữ ký 0x4D45494E"]
         C4 --> C6["Canvas RingBuffer (512 điểm cố định)<br/>Vẽ đường thử trực tiếp khi di chuyển trên bảng test"]

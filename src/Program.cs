@@ -139,9 +139,22 @@ namespace MeinyaTabletBooster
                         Console.Error.WriteLine("SELF-TEST FAIL: Simulated 133Hz measured as " + snap.RawHardwareHz);
                         return 1;
                     }
+                    if (snap.JitterMs > 0.25)
+                    {
+                        Console.Error.WriteLine("SELF-TEST FAIL: Uniform 133Hz simulated jitter too high: " + snap.JitterMs);
+                        return 1;
+                    }
                     if (engine.RemainingStepBudgetPx <= 0.0 || engine.RemainingStepBudgetPx > 12.0)
                     {
                         Console.Error.WriteLine("SELF-TEST FAIL: Anti-overshoot step budget out of range: " + engine.RemainingStepBudgetPx);
+                        return 1;
+                    }
+
+                    // Kiểm tra Quantized 1€ Filter khi phanh gấp về bước 1 px
+                    engine.ProcessRawHardwareSample(100 + 39 * 3 + 1, 200 + 39 * 2, baseTick + 40 * stepTicks);
+                    if (engine.RemainingStepBudgetPx >= 1.0)
+                    {
+                        Console.Error.WriteLine("SELF-TEST FAIL: Fine 1px deceleration budget exceeded 1.0px: " + engine.RemainingStepBudgetPx);
                         return 1;
                     }
 
@@ -153,6 +166,11 @@ namespace MeinyaTabletBooster
                     if (engine.EvaluateHookMouseMove(TemporalResamplerEngine.InjectedSignature, 0, testNow, out selfInj) || !selfInj)
                     {
                         Console.Error.WriteLine("SELF-TEST FAIL: InjectedSignature was not blocked by INV-1.");
+                        return 1;
+                    }
+                    if (!engine.WasRecentSelfInjected(testNow))
+                    {
+                        Console.Error.WriteLine("SELF-TEST FAIL: WasRecentSelfInjected did not return true after InjectedSignature.");
                         return 1;
                     }
                     if (!engine.EvaluateHookMouseMove(0xFF515701L, 0, testNow, out selfInj) || selfInj)
@@ -188,7 +206,7 @@ namespace MeinyaTabletBooster
 
                     // Kiểm tra hồi quy lỗi 170ms gap + nhảy > 80px phải xóa sạch vận tốc (INV-3)
                     long gap170MsTicks = (long)Math.Round(freq * 0.170);
-                    engine.ProcessRawHardwareSample(400, 500, baseTick + 39 * stepTicks + gap170MsTicks);
+                    engine.ProcessRawHardwareSample(400, 500, baseTick + 40 * stepTicks + gap170MsTicks);
                     TelemetrySnapshot afterJump = engine.GetTelemetrySnapshot();
                     if (!afterJump.VelocityBufferFlushed)
                     {

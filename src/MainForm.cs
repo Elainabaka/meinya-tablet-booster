@@ -5,6 +5,7 @@ using System.Drawing;
 using System.Drawing.Drawing2D;
 using System.IO;
 using System.Text;
+using System.Threading;
 using System.Windows.Forms;
 
 namespace MeinyaTabletBooster
@@ -119,6 +120,7 @@ namespace MeinyaTabletBooster
             _hwState = HardwareDetectorAndAdvisor.DetectConnectedTablet(_db);
             _selectedTablet = _hwState.Tablet;
             _engine = new TemporalResamplerEngine();
+            _engine.HasTabletContext = _hwState.IsConnected || File.Exists(WacomConfigManager.DefaultDatPath);
 
             LoadMascotImages();
             InitializeLayout();
@@ -897,12 +899,32 @@ namespace MeinyaTabletBooster
 
         private void OnRescanUsbClicked(object sender, EventArgs e)
         {
-            _hwState = HardwareDetectorAndAdvisor.DetectConnectedTablet(_db);
-            _selectedTablet = _hwState.Tablet;
-            PopulateTabletSelector();
-            PopulateTargetHzOptions();
-            UpdateHeaderAndTabletNotes();
-            UpdateSafetyBanner();
+            if (!_btnRescanUsb.Enabled) return;
+            _btnRescanUsb.Enabled = false;
+            _btnRescanUsb.Text = "Quét...";
+            ThreadPool.QueueUserWorkItem(_ =>
+            {
+                DetectedHardwareState detected = HardwareDetectorAndAdvisor.DetectConnectedTablet(_db);
+                try
+                {
+                    if (!this.IsDisposed && this.IsHandleCreated)
+                    {
+                        this.BeginInvoke((MethodInvoker)delegate
+                        {
+                            _hwState = detected;
+                            _selectedTablet = _hwState.Tablet;
+                            _engine.HasTabletContext = _hwState.IsConnected || File.Exists(WacomConfigManager.DefaultDatPath);
+                            PopulateTabletSelector();
+                            PopulateTargetHzOptions();
+                            UpdateHeaderAndTabletNotes();
+                            UpdateSafetyBanner();
+                            _btnRescanUsb.Text = "Quét lại";
+                            _btnRescanUsb.Enabled = true;
+                        });
+                    }
+                }
+                catch { }
+            });
         }
 
         private void OnTabletProfileChanged(object sender, EventArgs e)
@@ -1226,12 +1248,13 @@ namespace MeinyaTabletBooster
 
         private void OnCanvasMouseMove(object sender, MouseEventArgs e)
         {
+            long nowTick = Stopwatch.GetTimestamp();
             _engine.CanvasBuffer.Push(new CanvasSamplePoint
             {
                 X = e.X,
                 Y = e.Y,
-                IsInterpolated = _engine.IsResamplerEnabled,
-                Tick = Stopwatch.GetTimestamp()
+                IsInterpolated = _engine.IsResamplerEnabled && _engine.WasRecentSelfInjected(nowTick),
+                Tick = nowTick
             });
             _pnlCanvas.Invalidate();
         }
@@ -1268,7 +1291,10 @@ namespace MeinyaTabletBooster
             float maxJumpSq = maxJumpPx * maxJumpPx;
 
             using (Pen linePen = new Pen(_engine.IsResamplerEnabled ? Color.FromArgb(72, 198, 255) : Color.FromArgb(80, 225, 145), 2.0f))
-            using (Brush dotBrush = new SolidBrush(_engine.IsResamplerEnabled ? Color.FromArgb(145, 228, 255) : Color.FromArgb(125, 245, 175)))
+            using (Brush rawDotBrush = new SolidBrush(Color.FromArgb(110, 245, 165)))
+            using (Brush interpDotBrush = new SolidBrush(Color.FromArgb(255, 198, 82)))
+            using (Brush legendBrush = new SolidBrush(Color.FromArgb(165, 185, 212)))
+            using (Font legendFont = MakeFont(10.0f, FontStyle.Regular))
             {
                 for (int i = 1; i < count; i++)
                 {
@@ -1283,8 +1309,20 @@ namespace MeinyaTabletBooster
                     {
                         g.DrawLine(linePen, p0.X, p0.Y, p1.X, p1.Y);
                     }
-                    g.FillEllipse(dotBrush, p1.X - 2.5f, p1.Y - 2.5f, 5f, 5f);
+                    if (p1.IsInterpolated)
+                    {
+                        g.FillEllipse(interpDotBrush, p1.X - 1.9f, p1.Y - 1.9f, 3.8f, 3.8f);
+                    }
+                    else
+                    {
+                        g.FillEllipse(rawDotBrush, p1.X - 2.6f, p1.Y - 2.6f, 5.2f, 5.2f);
+                    }
                 }
+                g.DrawString(
+                    "● Xanh lá: Điểm gốc bảng vẽ   ● Vàng cam: Điểm nội suy chèn thêm",
+                    legendFont,
+                    legendBrush,
+                    new PointF(S(10), S(6)));
             }
         }
 
@@ -1313,7 +1351,10 @@ namespace MeinyaTabletBooster
             _lblOutHzSub.Text = _engine.IsResamplerEnabled
                 ? ("Đang làm mượt (Mục tiêu " + _engine.TargetHz + " Hz)")
                 : "Đang tắt làm mượt (Bấm nút hoặc F8)";
-            _lblIntervalSub.Text = "Đỉnh đo được (Peak): " + Math.Round(snap.PeakRawHz) + " Hz";
+            _lblIntervalSub.Text = string.Format(
+                "Đỉnh: {0} Hz | Jitter: ±{1:0.00} ms",
+                Math.Round(snap.PeakRawHz),
+                snap.JitterMs);
             _lblMemoryVal.Text = string.Format("Đệm: {0}/{1} ô", snap.RingBufferActiveItems, snap.RingBufferMaxCapacity);
             _lblMemorySub.Text = string.Format(
                 "Xoay vòng: {0} | Heap: {1:0.0} MB | {2}",
